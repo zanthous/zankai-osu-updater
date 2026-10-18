@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12</LangVersion>
+    <Version>0.1.0</Version>
+    <Product>Zankai Updater</Product>
+    <Title>Zankai Updater</Title>
+    <Authors>Zankai LLC</Authors>
+    <Company>Zankai LLC</Company>
+  </PropertyGroup>
+</Project>

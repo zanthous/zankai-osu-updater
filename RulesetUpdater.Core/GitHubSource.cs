@@ -1,0 +1,80 @@
+using System.Net;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
+using System.Text.Json;
+
+namespace RulesetUpdater;
+
+public sealed class GitHubSource(HttpClient http)
+{
+    private const long max_dll_size = 32 * 1024 * 1024;
+    public async Task<UpdateCandidate?> FindAsync(ManagedRuleset ruleset, string version, CancellationToken cancellationToken)
+    {
+        // GitHub lists by creation time, so inspect all pages in the bounded search before sorting by publication.
+        var releases = new List<Release>();
+        for (int page = 1; page <= 5; page++)
+        {
+            using var request = Request($"https://api.github.com/repos/{ruleset.Repository}/releases?per_page=100&page={page}");
+            using var response = await http.SendAsync(request, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+            Release[] batch = await JsonSerializer.DeserializeAsync<Release[]>(body, UpdateStorage.Json, cancellationToken) ?? [];
+            releases.AddRange(batch);
+            if (batch.Length < 100) break;
+        }
+        return ReleaseSelection.Select(releases, ruleset, version);
+    }
+
+    public static HttpRequestMessage Request(string url)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.UserAgent.ParseAdd("Zankai-Updater/0.1");
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+        return request;
+    }
+
+    public static string ExpectedHash(ReleaseAsset asset)
+    {
+        string digest = asset.Digest ?? "";
+        if (!digest.StartsWith("sha256:", StringComparison.Ordinal) || digest.Length != 71 || !digest.AsSpan(7).ToString().All(Uri.IsHexDigit))
+            throw new InvalidDataException("The release has no valid GitHub SHA-256 digest; it will not be installed.");
+        return digest[7..].ToLowerInvariant();
+    }
+
+    public async Task DownloadAsync(ManagedRuleset ruleset, UpdateCandidate candidate, string destination, CancellationToken cancellationToken)
+    {
+        ReleaseAsset asset = candidate.Asset;
+        string hash = ExpectedHash(asset);
+        if (asset.Name != ruleset.AssetName(candidate.ClientVersion)) throw new InvalidDataException("Unexpected asset name.");
+        if (asset.Size <= 0 || asset.Size > max_dll_size) throw new InvalidDataException("Invalid DLL download size.");
+        var url = new Uri(asset.DownloadUrl, UriKind.Absolute);
+        string prefix = $"/{ruleset.Repository}/releases/download/";
+        if (url.Scheme != "https" || url.Host != "github.com" || !url.IsDefaultPort || url.UserInfo.Length != 0 || !url.AbsolutePath.StartsWith(prefix, StringComparison.Ordinal))
+            throw new InvalidDataException("Download does not belong to the configured GitHub repository.");
+
+        try
+        {
+            using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, true))
+            {
+                var buffer = new byte[64 * 1024];
+                long total = 0;
+                int count;
+                while ((count = await input.ReadAsync(buffer, cancellationToken)) != 0)
+                {
+                    total += count;
+                    if (total > asset.Size) throw new InvalidDataException("Download exceeded its declared size.");
+                    await output.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+                }
+                if (total != asset.Size) throw new InvalidDataException("Incomplete download.");
+                output.Flush(true);
+            }
+            if (UpdateStorage.Hash(destination) != hash) throw new InvalidDataException("Downloaded DLL failed SHA-256 verification.");
+            if (AssemblyInfo.Read(destination).Name != ruleset.AssemblyName) throw new InvalidDataException("Downloaded DLL has the wrong assembly identity.");
+        }
+        catch { if (File.Exists(destination)) File.Delete(destination); throw; }
+    }
+}

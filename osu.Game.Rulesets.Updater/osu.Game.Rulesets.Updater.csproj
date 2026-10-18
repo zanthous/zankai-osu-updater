@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>osu.Game.Rulesets.Updater</RootNamespace>
+    <AssemblyName>osu.Game.Rulesets.ZankaiUpdater</AssemblyName>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ppy.osu.Game" Version="2026.730.0" PrivateAssets="all" />
+    <Compile Include="../Shared/ClientSession.cs" Link="ClientSession.cs" />
+  </ItemGroup>
+</Project>
