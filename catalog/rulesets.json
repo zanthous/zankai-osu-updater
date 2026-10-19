@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "rulesets": [
+    { "name": "Sticks", "repository": "zanthous/Sticks", "assemblyName": "osu.Game.Rulesets.Sticks", "assetPattern": "{assembly}-{client}.dll", "channels": ["lazer", "tachyon"], "installIfMissing": true },
+    { "name": "Sentakki", "repository": "LumpBloom7/sentakki", "assemblyName": "osu.Game.Rulesets.Sentakki", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "Tau", "repository": "taulazer/tau", "assemblyName": "osu.Game.Rulesets.Tau", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "Rush", "repository": "Beamographic/rush", "assemblyName": "osu.Game.Rulesets.Rush", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "Swing", "repository": "EVAST9919/lazer-swing", "assemblyName": "osu.Game.Rulesets.Swing", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "Soyokaze", "repository": "goodtrailer/soyokaze", "assemblyName": "osu.Game.Rulesets.Soyokaze", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "osu!space", "repository": "michioxd/osu-space", "assemblyName": "osu.Game.Rulesets.Space", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "FPSosu", "repository": "theokrueger/FPSosu", "assemblyName": "osu.Game.Rulesets.FPSosu", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "Hishigata", "repository": "LumpBloom7/hishigata", "assemblyName": "osu.Game.Rulesets.Hishigata", "assetPattern": "{assembly}.dll", "channels": ["lazer"] },
+    { "name": "MOsu", "repository": "p-720/mosu", "assemblyName": "osu.Game.Rulesets.MOsu", "assetPattern": "{assembly}.dll", "channels": ["lazer"], "enabled": false, "disabledReason": "Discontinued by its author; do not install older releases" }
+  ]
+}

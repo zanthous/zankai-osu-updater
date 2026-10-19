@@ -117,6 +117,12 @@ jobs:
           "./artifacts/package/$HELPER_NAME" --help | tee artifacts/helper-help.txt
           grep -q '^Zankai Updater' artifacts/helper-help.txt
 
+      - name: Test catalog, installs, recovery, and native self-update
+        env:
+          ZANKAI_TEST_HELPER: ${{ github.workspace }}/artifacts/package/${{ env.HELPER_NAME }}
+          ZANKAI_TEST_BRIDGE: ${{ github.workspace }}/artifacts/package/osu.Game.Rulesets.ZankaiUpdater.dll
+        run: dotnet test RulesetUpdater.Tests/RulesetUpdater.Tests.csproj --configuration Release
+
       - name: Archive Windows package
         if: runner.os == 'Windows'
         shell: pwsh

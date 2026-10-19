@@ -9,14 +9,20 @@ public sealed class UpdateStorage
     public string RulesetsDirectory { get; }
     public string WorkDirectory { get; }
 
-    public UpdateStorage(string rulesetsDirectory)
+    public UpdateStorage(string rulesetsDirectory) : this(rulesetsDirectory, null) { }
+
+    private UpdateStorage(string rulesetsDirectory, string? workDirectory)
     {
         RulesetsDirectory = Path.GetFullPath(rulesetsDirectory);
         if (!Directory.Exists(RulesetsDirectory)) throw new DirectoryNotFoundException(RulesetsDirectory);
-        WorkDirectory = Path.Combine(RulesetsDirectory, ".ruleset-updater");
+        WorkDirectory = workDirectory ?? Path.Combine(RulesetsDirectory, ".ruleset-updater");
         Directory.CreateDirectory(WorkDirectory);
         RequireRegularPath(WorkDirectory);
     }
+
+    // Keep the original Sticks transaction location recoverable when upgrading from the first release.
+    public UpdateStorage ForRuleset(ManagedRuleset ruleset) => ruleset.AssemblyName == ManagedRuleset.Sticks.AssemblyName
+        ? this : new UpdateStorage(RulesetsDirectory, Child(WorkDirectory, ruleset.AssemblyName));
 
     public static void RequireRegularPath(string path)
     {
@@ -33,7 +39,11 @@ public sealed class UpdateStorage
         return path;
     }
 
-    public static T? ReadJson<T>(string path) => File.Exists(path) ? JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json) : default;
+    public static T? ReadJson<T>(string path)
+    {
+        RequireRegularPath(path);
+        return File.Exists(path) ? JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json) : default;
+    }
 
     public static void WriteJson<T>(string path, T value)
     {

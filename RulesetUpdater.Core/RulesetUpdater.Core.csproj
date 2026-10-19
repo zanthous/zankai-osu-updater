@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <Compile Include="../Shared/ClientSession.cs" Link="ClientSession.cs" />
+    <EmbeddedResource Include="../catalog/rulesets.json" LogicalName="rulesets.json" />
   </ItemGroup>
 </Project>

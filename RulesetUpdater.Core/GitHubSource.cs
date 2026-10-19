@@ -8,8 +8,27 @@ namespace RulesetUpdater;
 public sealed class GitHubSource(HttpClient http)
 {
     private const long max_dll_size = 32 * 1024 * 1024;
+    public async Task<Release?> LatestAsync(string repository, CancellationToken cancellationToken)
+    {
+        RulesetCatalog.Repository(repository);
+        using var request = Request($"https://api.github.com/repos/{repository}/releases/latest");
+        using var response = await http.SendAsync(request, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+        await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+        Release? release = await JsonSerializer.DeserializeAsync<Release>(body, UpdateStorage.Json, cancellationToken);
+        return release is { Draft: false, Prerelease: false } ? release : null;
+    }
+
     public async Task<UpdateCandidate?> FindAsync(ManagedRuleset ruleset, string version, CancellationToken cancellationToken)
     {
+        new RulesetCatalog(1, [ruleset]).Validate();
+        if (!ruleset.Enabled || !ruleset.Channels.Contains(version.Split('-').Last())) return null;
+        if (!ruleset.ExactClient)
+        {
+            Release? latest = await LatestAsync(ruleset.Repository, cancellationToken);
+            return ReleaseSelection.Select(latest == null ? [] : [latest], ruleset, version);
+        }
         // GitHub lists by creation time, so inspect all pages in the bounded search before sorting by publication.
         var releases = new List<Release>();
         for (int page = 1; page <= 5; page++)
@@ -45,14 +64,29 @@ public sealed class GitHubSource(HttpClient http)
     public async Task DownloadAsync(ManagedRuleset ruleset, UpdateCandidate candidate, string destination, CancellationToken cancellationToken)
     {
         ReleaseAsset asset = candidate.Asset;
-        string hash = ExpectedHash(asset);
         if (asset.Name != ruleset.AssetName(candidate.ClientVersion)) throw new InvalidDataException("Unexpected asset name.");
-        if (asset.Size <= 0 || asset.Size > max_dll_size) throw new InvalidDataException("Invalid DLL download size.");
+        await DownloadAssetAsync(ruleset.Repository, asset, destination, max_dll_size, cancellationToken);
+        if (AssemblyInfo.Read(destination).Name != ruleset.AssemblyName)
+        {
+            File.Delete(destination);
+            throw new InvalidDataException("Downloaded DLL has the wrong assembly identity.");
+        }
+    }
+
+    public async Task DownloadAssetAsync(string repository, ReleaseAsset asset, string destination, long maxSize, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(90));
+        cancellationToken = timeout.Token;
+        RulesetCatalog.Repository(repository);
+        string hash = ExpectedHash(asset);
+        if (asset.Size <= 0 || asset.Size > maxSize) throw new InvalidDataException("Invalid download size.");
         var url = new Uri(asset.DownloadUrl, UriKind.Absolute);
-        string prefix = $"/{ruleset.Repository}/releases/download/";
-        if (url.Scheme != "https" || url.Host != "github.com" || !url.IsDefaultPort || url.UserInfo.Length != 0 || !url.AbsolutePath.StartsWith(prefix, StringComparison.Ordinal))
+        string prefix = $"/{repository}/releases/download/";
+        if (url.Scheme != "https" || url.Host != "github.com" || !url.IsDefaultPort || url.UserInfo.Length != 0 || !url.AbsolutePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("Download does not belong to the configured GitHub repository.");
 
+        bool created = false;
         try
         {
             using var response = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
@@ -60,6 +94,7 @@ public sealed class GitHubSource(HttpClient http)
             await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
             using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, true))
             {
+                created = true;
                 var buffer = new byte[64 * 1024];
                 long total = 0;
                 int count;
@@ -73,8 +108,7 @@ public sealed class GitHubSource(HttpClient http)
                 output.Flush(true);
             }
             if (UpdateStorage.Hash(destination) != hash) throw new InvalidDataException("Downloaded DLL failed SHA-256 verification.");
-            if (AssemblyInfo.Read(destination).Name != ruleset.AssemblyName) throw new InvalidDataException("Downloaded DLL has the wrong assembly identity.");
         }
-        catch { if (File.Exists(destination)) File.Delete(destination); throw; }
+        catch { if (created && File.Exists(destination)) File.Delete(destination); throw; }
     }
 }

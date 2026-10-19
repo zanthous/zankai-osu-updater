@@ -18,8 +18,15 @@ public static partial class ClientVersion
 public sealed record ManagedRuleset(string Repository, string AssemblyName)
 {
     public static readonly ManagedRuleset Sticks = new("zanthous/Sticks", "osu.Game.Rulesets.Sticks");
+    public string Name { get; init; } = AssemblyName?.Replace("osu.Game.Rulesets.", "") ?? "";
+    public string AssetPattern { get; init; } = "{assembly}-{client}.dll";
+    public string[] Channels { get; init; } = ["lazer", "tachyon"];
+    public bool Enabled { get; init; } = true;
+    public bool InstallIfMissing { get; init; }
+    public string? DisabledReason { get; init; }
+    public bool ExactClient => AssetPattern.Contains("{client}", StringComparison.Ordinal);
     public string InstalledFileName => AssemblyName + ".dll";
-    public string AssetName(string clientVersion) => $"{AssemblyName}-{clientVersion}.dll";
+    public string AssetName(string clientVersion) => AssetPattern.Replace("{assembly}", AssemblyName).Replace("{client}", clientVersion);
 }
 
 public sealed record ReleaseAsset
@@ -56,7 +63,11 @@ public static class ReleaseSelection
         if (ClientVersion.Parse(version) != version)
             throw new ArgumentException("An exact official lazer or Tachyon version is required.", nameof(version));
 
-        foreach (Release release in releases.Where(r => !r.Draft && !r.Prerelease).OrderByDescending(r => r.PublishedAt).ThenByDescending(r => r.Id))
+        if (!ruleset.Enabled || !ruleset.Channels.Contains(version.Split('-')[1])) return null;
+        IEnumerable<Release> eligible = releases.Where(r => !r.Draft && !r.Prerelease).OrderByDescending(r => r.PublishedAt).ThenByDescending(r => r.Id);
+        // An assetless latest release can be a discontinuation notice. Never resurrect an old generic build.
+        if (!ruleset.ExactClient) eligible = eligible.Take(1);
+        foreach (Release release in eligible)
         {
             ReleaseAsset[] assets = release.Assets.Where(a => a.Name == ruleset.AssetName(version)).ToArray();
             if (assets.Length > 1)
@@ -71,8 +82,10 @@ public static class ReleaseSelection
     {
         static (Version Version, string Suffix)? parse(string s)
         {
-            var match = Regex.Match(s, @"^v?(\d+\.\d+\.\d+)([a-z]*)(?:\+.*)?$", RegexOptions.CultureInvariant);
-            return match.Success ? (Version.Parse(match.Groups[1].Value), match.Groups[2].Value) : null;
+            var match = Regex.Match(s, @"^v?(\d+\.\d+(?:\.\d+)?)([a-z]*)(?:\+.*)?$", RegexOptions.CultureInvariant);
+            if (!match.Success) return null;
+            Version parsed = Version.Parse(match.Groups[1].Value);
+            return (new Version(parsed.Major, parsed.Minor, Math.Max(parsed.Build, 0)), match.Groups[2].Value);
         }
         var a = parse(installed);
         var b = parse(release);

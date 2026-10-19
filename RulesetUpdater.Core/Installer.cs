@@ -2,17 +2,29 @@ namespace RulesetUpdater;
 
 public sealed record InstallJournal(string Destination, string Hash, string BackupDirectory, InstalledFile[] Originals, bool Installing = false, bool Committed = false);
 
-public sealed class Installer(UpdateStorage storage, ManagedRuleset ruleset)
+public sealed class Installer(UpdateStorage root, ManagedRuleset ruleset)
 {
+    private readonly UpdateStorage storage = root.ForRuleset(ruleset);
+    public UpdateStatus? Status => UpdateStorage.ReadJson<UpdateStatus>(Path.Combine(storage.WorkDirectory, "status.json"));
     public string PendingPath => Path.Combine(storage.WorkDirectory, "pending.json");
     private string JournalPath => Path.Combine(storage.WorkDirectory, "transaction.json");
+    public bool HasTransaction => File.Exists(JournalPath);
+    public void RecordFailure(Exception error) => storage.Status("check-failed", $"{ruleset.Name}: {error.Message}");
 
-    public async Task<StagedUpdate?> PrepareAsync(GitHubSource source, string clientVersion, CancellationToken cancellationToken)
+    public async Task<StagedUpdate?> PrepareAsync(GitHubSource source, string clientVersion, CancellationToken cancellationToken, ClientCompatibility? compatibility = null)
     {
+        // A failed/empty fresh check must not leave a stale pending update eligible for installation.
+        File.Delete(PendingPath);
+        if (File.Exists(JournalPath)) throw new InvalidOperationException("Close osu! to recover an interrupted installation first.");
         InstalledFile[] installed = storage.FindInstalled(ruleset);
-        if (installed.Length == 0)
+        if (!ruleset.Enabled)
         {
-            storage.Status("not-installed", "Sticks is not installed in this rulesets folder.");
+            storage.Status("disabled", ruleset.DisabledReason ?? "Updates disabled for this ruleset.");
+            return null;
+        }
+        if (installed.Length == 0 && !ruleset.InstallIfMissing)
+        {
+            storage.Status("not-installed", $"{ruleset.Name} is not installed in this rulesets folder.");
             return null;
         }
         if (installed.Any(f => AssemblyInfo.Read(UpdateStorage.Child(storage.RulesetsDirectory, f.Name)).DevelopmentBuild))
@@ -24,7 +36,7 @@ public sealed class Installer(UpdateStorage storage, ManagedRuleset ruleset)
         UpdateCandidate? candidate = await source.FindAsync(ruleset, clientVersion, cancellationToken);
         if (candidate == null)
         {
-            storage.Status("waiting-for-build", $"No Sticks release matches osu! {clientVersion} yet.");
+            storage.Status("waiting-for-build", $"No {ruleset.Name} release matches osu! {clientVersion} yet.");
             return null;
         }
         string hash = GitHubSource.ExpectedHash(candidate.Asset);
@@ -35,12 +47,18 @@ public sealed class Installer(UpdateStorage storage, ManagedRuleset ruleset)
         }
         if (installed.Length == 1 && installed[0].Sha256 == hash)
         {
-            storage.Status("current", $"Sticks is up to date for osu! {clientVersion}.");
+            storage.Status("current", $"{ruleset.Name} is up to date for osu! {clientVersion}.");
             return null;
         }
         if (installed.Any(f => ReleaseSelection.IsNewerInstalledVersion(f.InformationalVersion, candidate.ReleaseTag)))
         {
-            storage.Status("newer-installed", "Leaving the newer installed Sticks version untouched.");
+            storage.Status("newer-installed", $"Leaving the newer installed {ruleset.Name} version untouched.");
+            return null;
+        }
+
+        if (!ruleset.ExactClient && compatibility == null)
+        {
+            storage.Status("unverified-client", "Generic DLL updates need the client's osu.Game.dll for compatibility checks. Launch osu! once or pass --client-path.");
             return null;
         }
 
@@ -48,10 +66,17 @@ public sealed class Installer(UpdateStorage storage, ManagedRuleset ruleset)
         string stagedPath = UpdateStorage.Child(storage.WorkDirectory, stagedName);
         if (File.Exists(stagedPath) && UpdateStorage.Hash(stagedPath) != hash) File.Delete(stagedPath);
         if (!File.Exists(stagedPath)) await source.DownloadAsync(ruleset, candidate, stagedPath, cancellationToken);
-        if (AssemblyInfo.Read(stagedPath).Name != ruleset.AssemblyName) throw new InvalidDataException("Wrong staged assembly.");
+        AssemblyInfo info = AssemblyInfo.Read(stagedPath);
+        if (info.Name != ruleset.AssemblyName) throw new InvalidDataException("Wrong staged assembly.");
+        if (!ruleset.ExactClient && compatibility!.Rejection(info) is string rejection)
+        {
+            File.Delete(stagedPath);
+            storage.Status("incompatible", rejection);
+            return null;
+        }
         var pending = new StagedUpdate(clientVersion, candidate.ReleaseTag, hash, stagedName, installed);
         UpdateStorage.WriteJson(PendingPath, pending);
-        storage.Status("ready", $"Sticks {candidate.ReleaseTag} is ready. Close osu! to apply it.");
+        storage.Status("ready", $"{ruleset.Name} {candidate.ReleaseTag} is ready. Close osu! to apply it.");
         return pending;
     }
 
@@ -99,7 +124,7 @@ public sealed class Installer(UpdateStorage storage, ManagedRuleset ruleset)
         // The replacement succeeded. Delete the temporary originals, not retain a rollback archive.
         // Keep the committed journal until cleanup finishes so an interruption cannot strand old DLLs.
         cleanUp(journal);
-        storage.Status("installed", $"Installed Sticks {pending.ReleaseTag} for osu! {currentClientVersion}.");
+        storage.Status("installed", $"Installed {ruleset.Name} {pending.ReleaseTag} for osu! {currentClientVersion}.");
     }
 
     // Run only while osu! is closed. Temporary originals exist only until replacement completes.

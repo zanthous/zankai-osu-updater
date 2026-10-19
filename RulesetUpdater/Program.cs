@@ -1,30 +1,27 @@
-using System.Text.Json;
-
 namespace RulesetUpdater;
 
 internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
-        bool interactive = args.Length == 0;
+        bool interactive = args.Length == 0, handedOff = false;
         UpdateStorage? storage = null;
         try
         {
             var options = Options.Parse(args);
             if (options.Help)
             {
-                Console.WriteLine("Zankai Updater\n\nRun beside your ruleset DLLs to update Sticks. Close osu! before applying.\n\n  --check                  Check only; do not download or install\n  --apply                  Download and install while osu! is closed\n  --client-version TAG     Exact version, e.g. 2026.1005.0-lazer\n  --rulesets PATH          Use a specific rulesets directory\n  --help                   Show this help");
+                Console.WriteLine("Zankai Updater\n\nChecks the catalog and itself once at osu! startup. Applies after osu! closes.\n\n  --check                  Check only; no DLL or program downloads\n  --apply                  Download and install while osu! is closed\n  --list                   List catalog sources\n  --add-source OWNER/REPO   Add a trusted external source for an installed DLL\n  --yes                    Confirm trusting the specified external repository\n  --client-version TAG     Exact version, e.g. 2026.1005.0-lazer\n  --client-path PATH       Client assembly or osu.Game.dll for compatibility checks\n  --rulesets PATH          Use a specific rulesets directory\n  --help                   Show this help");
                 return 0;
             }
-
             storage = new UpdateStorage(options.Rulesets ?? AppContext.BaseDirectory);
-            string lockPath = Path.Combine(storage.WorkDirectory, "updater.lock");
-            UpdateStorage.RequireRegularPath(lockPath);
+            if (options.FinishSelfUpdate) await SelfUpdateRunner.WaitForParent(options.WaitProcess, options.WaitStart);
+            string lockPath = UpdateStorage.Child(storage.WorkDirectory, "updater.lock");
             FileStream updaterLock;
-            try { updaterLock = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            try { updaterLock = await AcquireLock(lockPath, options.Watch || options.FinishSelfUpdate); }
             catch (IOException)
             {
-                Console.WriteLine("An updater is already running for this folder. Close osu! and try again.");
+                Console.WriteLine("An updater is already running for this folder.");
                 return 2;
             }
             using (updaterLock)
@@ -32,12 +29,63 @@ internal static class Program
             using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) })
             {
                 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancellation.Cancel(); };
-                var source = new GitHubSource(http);
-                var installer = new Installer(storage, ManagedRuleset.Sticks);
-                if (options.Watch)
-                    return await Watch(options, storage, source, installer, cancellation.Token);
+                var token = cancellation.Token;
+                var self = new SelfUpdate(storage);
+                if (options.FinishSelfUpdate)
+                {
+                    string runner = Path.Combine(storage.WorkDirectory, "install-runner", SelfUpdate.HelperName);
+                    if (!string.Equals(Path.GetFullPath(Environment.ProcessPath ?? ""), runner, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                        throw new InvalidOperationException("Self-replacement must run from the temporary install runner.");
+                    if (ClientProcesses.AnyOsuRunning(storage)) return 0;
+                    self.Recover();
+                    if (File.Exists(self.PlanPath)) self.Apply(() => ClientProcesses.AnyOsuRunning(storage));
+                    return 0;
+                }
+                SelfUpdateRunner.CleanRunner(storage);
+                var oldSelf = UpdateStorage.ReadJson<SelfUpdatePlan>(self.PlanPath);
+                if (!options.Check && !options.List && options.AddSource == null && oldSelf is ({ Applying: true } or { Committed: true }))
+                {
+                    if (ClientProcesses.AnyOsuRunning(storage))
+                        throw new IOException("Close osu! and run ZankaiUpdater once to finish an interrupted updater replacement.");
+                    SelfUpdateRunner.Start(storage);
+                    handedOff = true;
+                    return 0;
+                }
 
-                ClientSession? previous = UpdateStorage.ReadJson<ClientSession>(Path.Combine(storage.WorkDirectory, "last-client.json"));
+                var source = new GitHubSource(http);
+                var catalogs = new CatalogSource(http, storage);
+                RulesetCatalog catalog = await catalogs.LoadAsync(token);
+                if (options.List)
+                {
+                    foreach (var rule in catalog.Rulesets) Console.WriteLine($"{rule.Name}: {rule.Repository} [{string.Join(", ", rule.Channels)}]{(rule.Enabled ? rule.InstallIfMissing ? " — install automatically" : " — update if installed" : " — " + rule.DisabledReason)}");
+                    return 0;
+                }
+                if (options.AddSource != null)
+                {
+                    var discovered = await CatalogSource.DiscoverAsync(options.AddSource, source, storage, token);
+                    var added = discovered.Where(d => !catalog.Rulesets.Any(c => c.AssemblyName == d.AssemblyName)).ToArray();
+                    if (added.Length == 0) throw new InvalidOperationException("No unmanaged installed ruleset matches a plain DLL in this repository's latest release. Catalog entries cannot be overridden.");
+                    Console.WriteLine($"Trust {RulesetCatalog.Repository(options.AddSource)} to provide executable updates for {string.Join(", ", added.Select(a => a.Name))}?");
+                    if (!options.Yes)
+                    {
+                        if (Console.IsInputRedirected) throw new ArgumentException("Pass --yes to confirm trusting this repository.");
+                        Console.Write("[y/N] ");
+                        if (!string.Equals(Console.ReadLine()?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) return 0;
+                    }
+                    catalogs.AddExternal(added);
+                    Console.WriteLine("Source added. It will be checked at the next launch (stable lazer only).");
+                    return 0;
+                }
+
+                var installers = catalog.Rulesets.Select(rule => (Rule: rule, Installer: new Installer(storage, rule)))
+                    .Where(x => x.Rule.InstallIfMissing || storage.FindInstalled(x.Rule).Length > 0 || x.Installer.HasTransaction).ToArray();
+                if (options.Watch)
+                {
+                    handedOff = await Watch(options, storage, source, installers, self, token);
+                    return 0;
+                }
+
+                var previous = UpdateStorage.ReadJson<ClientSession>(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"));
                 string? version = options.Version ?? (previous != null ? ClientProcesses.ReadClientVersion(previous) : null);
                 if (interactive && version == null)
                 {
@@ -45,28 +93,31 @@ internal static class Program
                     version = ClientVersion.Parse(Console.ReadLine());
                 }
                 if (version == null) throw new ArgumentException("Specify --client-version with your exact osu! version.");
-                Console.WriteLine($"Sticks updates for osu! {version}");
                 if (options.Check)
                 {
-                    UpdateCandidate? match = await source.FindAsync(ManagedRuleset.Sticks, version, cancellation.Token);
-                    Console.WriteLine(match == null ? "No matching release is available." : $"Matching release: {match.ReleaseTag}\n{match.Asset.Name}");
+                    foreach (var (rule, _) in installers)
+                    {
+                        UpdateCandidate? match = await source.FindAsync(rule, version, token);
+                        Console.WriteLine($"{rule.Name}: {(match == null ? rule.DisabledReason ?? "no matching release" : match.ReleaseTag + " / " + match.Asset.Name + " (compatibility checked before installation)")}");
+                    }
+                    Release? latest = await source.LatestAsync(CatalogSource.UpdaterRepository, token);
+                    Console.WriteLine($"Zankai Updater: latest {latest?.Tag ?? "unavailable"}; this build {SelfUpdateRunner.Version}");
                     return 0;
                 }
                 if (ClientProcesses.AnyOsuRunning(storage)) throw new InvalidOperationException("Close osu! before applying updates.");
-                installer.Recover();
-                StagedUpdate? pending = await installer.PrepareAsync(source, version, cancellation.Token);
-                PrintStatus(storage);
-                if (pending != null)
+                string? clientPath = options.ClientPath ?? (previous != null && ClientProcesses.ReadClientVersion(previous) == version ? previous.AssemblyPath : null);
+                var compatibility = ClientCompatibility.Read(clientPath);
+                foreach (var (_, installer) in installers) installer.Recover();
+                int failures = await Prepare(source, installers, version, compatibility, token);
+                await PrepareSelf(storage, source, self, token);
+                if (interactive)
                 {
-                    if (interactive)
-                    {
-                        Console.Write("Install this update? [Y/n] ");
-                        if (Console.ReadLine()?.Trim().StartsWith("n", StringComparison.OrdinalIgnoreCase) == true) return 0;
-                    }
-                    installer.Apply(pending, version, () => ClientProcesses.AnyOsuRunning(storage));
-                    PrintStatus(storage);
+                    Console.Write("Install prepared updates? [Y/n] ");
+                    if (Console.ReadLine()?.Trim().StartsWith("n", StringComparison.OrdinalIgnoreCase) == true) return 0;
                 }
-                return 0;
+                failures += Apply(storage, installers, version);
+                if (File.Exists(self.PlanPath)) { SelfUpdateRunner.Start(storage); handedOff = true; }
+                return failures == 0 ? 0 : 1;
             }
         }
         catch (OperationCanceledException) { Console.WriteLine("Update cancelled."); return 2; }
@@ -78,7 +129,7 @@ internal static class Program
         }
         finally
         {
-            if (interactive && !Console.IsInputRedirected)
+            if (interactive && !handedOff && !Console.IsInputRedirected)
             {
                 Console.WriteLine("Press Enter to close.");
                 Console.ReadLine();
@@ -86,7 +137,68 @@ internal static class Program
         }
     }
 
-    private static async Task<int> Watch(Options options, UpdateStorage storage, GitHubSource source, Installer installer, CancellationToken cancellation)
+    private static async Task<FileStream> AcquireLock(string path, bool wait)
+    {
+        // Let a previous launch finish its short close/restart handoff before acquiring the lock.
+        for (int attempt = 0; ; attempt++)
+        {
+            try { return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+            catch (IOException) when (wait && attempt < 15) { await Task.Delay(TimeSpan.FromSeconds(1)); }
+        }
+    }
+
+    private static async Task<int> Prepare(GitHubSource source, (ManagedRuleset Rule, Installer Installer)[] installers,
+                                          string version, ClientCompatibility? compatibility, CancellationToken cancellation)
+    {
+        int failures = 0;
+        foreach (var (rule, installer) in installers)
+        {
+            try
+            {
+                await installer.PrepareAsync(source, version, cancellation, compatibility);
+                Console.WriteLine($"{rule.Name}: {installer.Status?.Message}");
+            }
+            catch (Exception e) when (!cancellation.IsCancellationRequested)
+            {
+                failures++;
+                installer.RecordFailure(e);
+                Console.Error.WriteLine($"{rule.Name}: {e.Message}");
+            }
+        }
+        return failures;
+    }
+
+    private static int Apply(UpdateStorage storage, (ManagedRuleset Rule, Installer Installer)[] installers, string version)
+    {
+        int failures = 0;
+        foreach (var (rule, installer) in installers)
+        {
+            try
+            {
+                installer.Recover();
+                var pending = UpdateStorage.ReadJson<StagedUpdate>(installer.PendingPath);
+                if (pending == null) continue;
+                installer.Apply(pending, version, () => ClientProcesses.AnyOsuRunning(storage));
+                Console.WriteLine(installer.Status?.Message);
+            }
+            catch (Exception e) { failures++; storage.Status("install-failed", $"{rule.Name}: {e.Message}"); }
+        }
+        return failures;
+    }
+
+    private static async Task PrepareSelf(UpdateStorage storage, GitHubSource source, SelfUpdate self, CancellationToken cancellation)
+    {
+        if (!SelfUpdateRunner.Available(storage)) return;
+        try
+        {
+            var pending = await self.PrepareAsync(source, SelfUpdateRunner.Version, cancellation);
+            if (pending != null) storage.Status("self-update-ready", $"Zankai Updater {pending.ReleaseTag} will install after osu! closes.");
+        }
+        catch (Exception e) when (!cancellation.IsCancellationRequested) { storage.Status("self-check-failed", e.Message); }
+    }
+
+    private static async Task<bool> Watch(Options options, UpdateStorage storage, GitHubSource source,
+                                         (ManagedRuleset Rule, Installer Installer)[] installers, SelfUpdate self, CancellationToken cancellation)
     {
         string sessionPath = Path.GetFullPath(options.Session ?? throw new ArgumentException("Missing session."));
         if (Path.GetDirectoryName(sessionPath) != storage.WorkDirectory || !Path.GetFileName(sessionPath).StartsWith("session-", StringComparison.Ordinal))
@@ -94,74 +206,59 @@ internal static class Program
         ClientSession session = UpdateStorage.ReadJson<ClientSession>(sessionPath) ?? throw new InvalidDataException("Missing client session.");
         if (session.Schema != 1 || !session.OfficialBuild || ClientVersion.Parse(session.Version) != session.Version || !ClientProcesses.Running(session))
             throw new InvalidDataException("The osu! session is no longer valid.");
-        UpdateStorage.WriteJson(Path.Combine(storage.WorkDirectory, "last-client.json"), session);
-        DateTimeOffset nextCheck = DateTimeOffset.MinValue;
-        string lastCheckFile = Path.Combine(storage.WorkDirectory, "last-check.json");
-        LastCheck? lastCheck = UpdateStorage.ReadJson<LastCheck>(lastCheckFile);
-        if (lastCheck?.Version == session.Version && lastCheck.At < DateTimeOffset.UtcNow)
-            nextCheck = lastCheck.At.AddMinutes(15);
-
-        while (ClientProcesses.Running(session))
+        UpdateStorage.WriteJson(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"), session);
+        try
         {
-            cancellation.ThrowIfCancellationRequested();
-            if (DateTimeOffset.UtcNow >= nextCheck)
-            {
-                // Persist before making requests so rapid restarts/offline errors cannot flood the API.
-                UpdateStorage.WriteJson(lastCheckFile, new LastCheck(session.Version, DateTimeOffset.UtcNow));
-                nextCheck = DateTimeOffset.UtcNow.AddMinutes(15);
-                try { await installer.PrepareAsync(source, session.Version, cancellation); }
-                catch (Exception e) when (e is not OperationCanceledException)
-                {
-                    storage.Status("check-failed", $"Update check failed; will retry: {e.Message}");
-                }
-            }
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellation);
+            // One network pass for this launch. This loop only waits for osu! to close.
+            await Prepare(source, installers, session.Version, ClientCompatibility.Read(session.AssemblyPath), cancellation);
+            await PrepareSelf(storage, source, self, cancellation);
+            while (ClientProcesses.Running(session)) await Task.Delay(TimeSpan.FromSeconds(2), cancellation);
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellation);
+            if (ClientProcesses.AnyOsuRunning(storage)) return false;
+            string? version = ClientProcesses.ReadClientVersion(session);
+            if (version == session.Version) Apply(storage, installers, version);
+            else storage.Status("waiting-for-client", "osu! changed installation or version. The next launch will check for matching builds.");
+            if (!File.Exists(self.PlanPath)) return false;
+            SelfUpdateRunner.Start(storage);
+            return true;
         }
-
-        // Give the host's update/restart handoff time to start. Never force-close a game.
-        await Task.Delay(TimeSpan.FromSeconds(3), cancellation);
-        if (ClientProcesses.AnyOsuRunning(storage)) return 0;
-        installer.Recover();
-        StagedUpdate? pending = UpdateStorage.ReadJson<StagedUpdate>(installer.PendingPath);
-        if (pending == null) return 0;
-        string? currentVersion = ClientProcesses.ReadClientVersion(session);
-        if (currentVersion == null || currentVersion != pending.ClientVersion)
-        {
-            storage.Status("waiting-for-client", "osu! changed installation or version. The next launch will check for the matching build.");
-            return 0;
-        }
-        installer.Apply(pending, currentVersion, () => ClientProcesses.AnyOsuRunning(storage));
-        File.Delete(sessionPath);
-        return 0;
+        finally { if (!ClientProcesses.Running(session)) File.Delete(sessionPath); }
     }
 
-    private static void PrintStatus(UpdateStorage storage) => Console.WriteLine(UpdateStorage.ReadJson<UpdateStatus>(Path.Combine(storage.WorkDirectory, "status.json"))?.Message);
-    private sealed record LastCheck(string Version, DateTimeOffset At);
-
-    private sealed record Options(bool Help, bool Check, bool Watch, string? Version, string? Rulesets, string? Session)
+    private sealed record Options
     {
+        public bool Help, Check, Watch, List, Yes, FinishSelfUpdate;
+        public string? Version, Rulesets, Session, AddSource, ClientPath;
+        public int WaitProcess;
+        public long WaitStart;
         public static Options Parse(string[] args)
         {
-            bool help = false, check = false, watch = false, apply = false;
-            string? version = null, rulesets = null, session = null;
+            var o = new Options();
+            int modes = 0;
             for (int i = 0; i < args.Length; i++)
             {
                 string value() => ++i < args.Length ? args[i] : throw new ArgumentException("Missing option value.");
                 switch (args[i])
                 {
-                    case "--help": case "-h": help = true; break;
-                    case "--check": check = true; break;
-                    case "--apply": apply = true; break;
-                    case "--watch": watch = true; break;
-                    case "--client-version": version = ClientVersion.Parse(value()) ?? throw new ArgumentException("Invalid client version."); break;
-                    case "--rulesets": rulesets = value(); break;
-                    case "--session": session = value(); break;
+                    case "--help": case "-h": o.Help = true; break;
+                    case "--check": o.Check = true; modes++; break;
+                    case "--apply": modes++; break;
+                    case "--watch": o.Watch = true; modes++; break;
+                    case "--list": o.List = true; modes++; break;
+                    case "--add-source": o.AddSource = RulesetCatalog.Repository(value()); modes++; break;
+                    case "--yes": o.Yes = true; break;
+                    case "--finish-self-update": o.FinishSelfUpdate = true; modes++; break;
+                    case "--wait-process": o.WaitProcess = int.Parse(value()); break;
+                    case "--wait-start": o.WaitStart = long.Parse(value()); break;
+                    case "--client-version": o.Version = ClientVersion.Parse(value()) ?? throw new ArgumentException("Invalid client version."); break;
+                    case "--client-path": o.ClientPath = value(); break;
+                    case "--rulesets": o.Rulesets = value(); break;
+                    case "--session": o.Session = value(); break;
                     default: throw new ArgumentException($"Unknown option: {args[i]}");
                 }
             }
-            if ((check ? 1 : 0) + (apply ? 1 : 0) + (watch ? 1 : 0) > 1) throw new ArgumentException("Choose --check, --apply, or --watch.");
-            if (args.Length > 0 && !help && !check && !apply && !watch) throw new ArgumentException("Specify --check or --apply.");
-            return new Options(help, check, watch, version, rulesets, session);
+            if (modes > 1 || (args.Length > 0 && !o.Help && modes == 0)) throw new ArgumentException("Choose one action: --check, --apply, --list, or --add-source.");
+            return o;
         }
     }
 }
