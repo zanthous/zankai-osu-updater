@@ -14,7 +14,7 @@ public sealed class Installer(UpdateStorage root, ManagedRuleset ruleset)
     public async Task<StagedUpdate?> PrepareAsync(GitHubSource source, string clientVersion, CancellationToken cancellationToken, ClientCompatibility? compatibility = null)
     {
         // A failed/empty fresh check must not leave a stale pending update eligible for installation.
-        File.Delete(PendingPath);
+        if (File.Exists(PendingPath)) File.Delete(PendingPath);
         if (File.Exists(JournalPath)) throw new InvalidOperationException("Close osu! to recover an interrupted installation first.");
         InstalledFile[] installed = storage.FindInstalled(ruleset);
         if (!ruleset.Enabled)
@@ -62,6 +62,7 @@ public sealed class Installer(UpdateStorage root, ManagedRuleset ruleset)
             return null;
         }
 
+        storage.EnsureWorkDirectory();
         string stagedName = hash + ".download";
         string stagedPath = UpdateStorage.Child(storage.WorkDirectory, stagedName);
         if (File.Exists(stagedPath) && UpdateStorage.Hash(stagedPath) != hash) File.Delete(stagedPath);

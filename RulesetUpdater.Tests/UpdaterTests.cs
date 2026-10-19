@@ -64,6 +64,65 @@ public sealed class UpdaterTests
         Assert.That(catalog.Rulesets.Count(r => r.Enabled), Is.EqualTo(9));
     }
 
+    [Test]
+    public void InspectingCatalogDoesNotCreateRulesetDirectories()
+    {
+        foreach (var rule in CatalogSource.Bundled().Rulesets)
+        {
+            var installer = new Installer(storage, rule);
+            Assert.That(installer.HasTransaction, Is.False);
+            Assert.That(installer.Status, Is.Null);
+            Assert.That(installer.Recover(), Is.False);
+        }
+        Assert.That(Directory.GetFileSystemEntries(storage.WorkDirectory), Is.Empty);
+    }
+
+    [Test]
+    public void WritingRulesetStatusCreatesOnlyItsOwnDirectory()
+    {
+        var installer = new Installer(storage, fixture);
+        installer.RecordFailure(new IOException("test failure"));
+        Assert.That(Directory.GetDirectories(storage.WorkDirectory), Is.EqualTo(new[] { Path.Combine(storage.WorkDirectory, fixture.AssemblyName) }));
+        Assert.That(installer.Status!.State, Is.EqualTo("check-failed"));
+    }
+
+    [Test]
+    public void CleanupRemovesOnlyEmptyKnownRulesetDirectories()
+    {
+        var rulesets = CatalogSource.Bundled().Rulesets.Where(r => r.AssemblyName != ManagedRuleset.Sticks.AssemblyName).ToArray();
+        foreach (var rule in rulesets) Directory.CreateDirectory(Path.Combine(storage.WorkDirectory, rule.AssemblyName));
+        string occupied = Path.Combine(storage.WorkDirectory, rulesets[0].AssemblyName);
+        string[] files = ["pending.json", "transaction.json", "status.json", "payload.download"];
+        foreach (string name in files)
+            File.WriteAllText(Path.Combine(occupied, name), "preserve");
+        string backup = Path.Combine(storage.WorkDirectory, rulesets[1].AssemblyName);
+        Directory.CreateDirectory(Path.Combine(backup, "replacement-test"));
+        string unknown = Path.Combine(storage.WorkDirectory, "unknown");
+        Directory.CreateDirectory(unknown);
+        File.WriteAllText(Path.Combine(storage.WorkDirectory, "transaction.json"), "legacy Sticks transaction");
+
+        storage.RemoveEmptyRulesetDirectories(rulesets);
+
+        Assert.That(Directory.GetDirectories(storage.WorkDirectory), Is.EquivalentTo(new[] { occupied, backup, unknown }));
+        foreach (string name in files) Assert.That(File.ReadAllText(Path.Combine(occupied, name)), Is.EqualTo("preserve"));
+        Assert.That(File.ReadAllText(Path.Combine(storage.WorkDirectory, "transaction.json")), Is.EqualTo("legacy Sticks transaction"));
+        Assert.That(new Installer(storage, rulesets[0]).HasTransaction, Is.True);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void CleanupDoesNotFollowOrRemoveDirectoryLinks(bool targetExists)
+    {
+        if (OperatingSystem.IsWindows()) Assert.Ignore("Creating symlinks on Windows requires additional privileges.");
+        string target = Path.Combine(directory, "other");
+        if (targetExists) Directory.CreateDirectory(target);
+        string link = Path.Combine(storage.WorkDirectory, fixture.AssemblyName);
+        Directory.CreateSymbolicLink(link, target);
+        storage.RemoveEmptyRulesetDirectories([fixture]);
+        Assert.That(new DirectoryInfo(link).LinkTarget, Is.EqualTo(target));
+        Assert.That(Directory.Exists(target), Is.EqualTo(targetExists));
+    }
+
     [TestCase("../repo")]
     [TestCase("https://evil.example/owner/repo")]
     [TestCase("owner/repo?token=oops")]
@@ -219,6 +278,7 @@ public sealed class UpdaterTests
         File.WriteAllBytes(Path.Combine(directory, fixture.InstalledFileName), bytes.Concat(new byte[] { 1 }).ToArray());
         using var http = Client(Release(Asset(generic.AssetName(version), bytes)), bytes);
         var installer = new Installer(storage, generic);
+        Directory.CreateDirectory(Path.GetDirectoryName(installer.PendingPath)!);
         UpdateStorage.WriteJson(installer.PendingPath, new StagedUpdate(version, "old", "old", "old", []));
         Assert.That(await installer.PrepareAsync(new GitHubSource(http), version, default), Is.Null);
         Assert.That(File.Exists(installer.PendingPath), Is.False);

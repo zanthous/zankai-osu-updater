@@ -122,7 +122,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
-          Compress-Archive -Path artifacts/package/* -DestinationPath "artifacts/release/ZankaiUpdater-$env:TARGET_RUNTIME.zip"
+          Compress-Archive -Path @("artifacts/package/osu.Game.Rulesets.ZankaiUpdater.dll", "artifacts/package/$env:HELPER_NAME") -DestinationPath "artifacts/release/ZankaiUpdater-$env:TARGET_RUNTIME.zip"
 
       - name: Archive Linux or macOS package
         if: runner.os != 'Windows'

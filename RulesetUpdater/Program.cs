@@ -77,6 +77,7 @@ internal static class Program
                     return 0;
                 }
 
+                storage.RemoveEmptyRulesetDirectories(catalog.Rulesets);
                 var installers = catalog.Rulesets.Select(rule => (Rule: rule, Installer: new Installer(storage, rule)))
                     .Where(x => x.Rule.InstallIfMissing || storage.FindInstalled(x.Rule).Length > 0 || x.Installer.HasTransaction).ToArray();
                 if (options.Watch)

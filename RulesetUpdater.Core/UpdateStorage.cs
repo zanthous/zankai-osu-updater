@@ -16,13 +16,39 @@ public sealed class UpdateStorage
         RulesetsDirectory = Path.GetFullPath(rulesetsDirectory);
         if (!Directory.Exists(RulesetsDirectory)) throw new DirectoryNotFoundException(RulesetsDirectory);
         WorkDirectory = workDirectory ?? Path.Combine(RulesetsDirectory, ".ruleset-updater");
-        Directory.CreateDirectory(WorkDirectory);
         RequireRegularPath(WorkDirectory);
+        // The root holds the process lock. Per-ruleset storage is created only on a write,
+        // so inspecting the catalog or looking for interrupted updates leaves no folders.
+        if (workDirectory == null) EnsureWorkDirectory();
     }
 
     // Keep the original Sticks transaction location recoverable when upgrading from the first release.
     public UpdateStorage ForRuleset(ManagedRuleset ruleset) => ruleset.AssemblyName == ManagedRuleset.Sticks.AssemblyName
         ? this : new UpdateStorage(RulesetsDirectory, Child(WorkDirectory, ruleset.AssemblyName));
+
+    internal void EnsureWorkDirectory()
+    {
+        RequireRegularPath(WorkDirectory);
+        Directory.CreateDirectory(WorkDirectory);
+        RequireRegularPath(WorkDirectory);
+    }
+
+    public void RemoveEmptyRulesetDirectories(IEnumerable<ManagedRuleset> rulesets)
+    {
+        foreach (var ruleset in rulesets)
+        {
+            // Older builds eagerly created these directories for every catalog entry.
+            // Delete only known, empty, regular directories; preserve all update state.
+            try
+            {
+                string path = Child(WorkDirectory, ruleset.AssemblyName);
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) continue;
+                Directory.Delete(path);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
 
     public static void RequireRegularPath(string path)
     {
@@ -61,7 +87,11 @@ public sealed class UpdateStorage
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    public void Status(string state, string message) => WriteJson(Path.Combine(WorkDirectory, "status.json"), new UpdateStatus(state, message, DateTimeOffset.UtcNow));
+    public void Status(string state, string message)
+    {
+        EnsureWorkDirectory();
+        WriteJson(Path.Combine(WorkDirectory, "status.json"), new UpdateStatus(state, message, DateTimeOffset.UtcNow));
+    }
     public static string Hash(string path)
     {
         using var file = File.OpenRead(path);
