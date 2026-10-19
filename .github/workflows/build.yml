@@ -24,9 +24,34 @@ defaults:
 
 jobs:
   build:
-    name: Build Windows x64
-    runs-on: windows-latest
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            runtime: win-x64
+          - name: Windows ARM64
+            runner: windows-11-arm
+            runtime: win-arm64
+          - name: Linux x64
+            runner: ubuntu-24.04
+            runtime: linux-x64
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            runtime: linux-arm64
+          - name: macOS Intel
+            runner: macos-15-intel
+            runtime: osx-x64
+          - name: macOS Apple Silicon
+            runner: macos-15
+            runtime: osx-arm64
+    env:
+      TARGET_RUNTIME: ${{ matrix.runtime }}
+      HELPER_NAME: ${{ startsWith(matrix.runtime, 'win-') && 'ZankaiUpdater.exe' || 'ZankaiUpdater' }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,7 +73,7 @@ jobs:
             version="$informational_version"
             # Preserve letter-suffixed release names while giving NuGet a valid version.
             if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)([a-z]+)(\+[0-9A-Za-z.-]+)?$ ]]; then
-              version="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+              version="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}${BASH_REMATCH[3]-}"
             fi
             if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
               printf 'Unsupported release tag: %s\n' "$GITHUB_REF_NAME" >&2
@@ -65,10 +90,10 @@ jobs:
             -p:InformationalVersion="$INFORMATIONAL_VERSION" \
             -p:IncludeSourceRevisionInInformationalVersion=false
 
-      - name: Publish standalone Windows EXE
+      - name: Publish standalone helper
         run: |
           dotnet publish RulesetUpdater/RulesetUpdater.csproj \
-            --configuration Release --runtime win-x64 --self-contained true \
+            --configuration Release --runtime "$TARGET_RUNTIME" --self-contained true \
             --output artifacts/helper \
             -p:PublishSingleFile=true \
             -p:IncludeNativeLibrariesForSelfExtract=true \
@@ -77,23 +102,41 @@ jobs:
             -p:InformationalVersion="$INFORMATIONAL_VERSION" \
             -p:IncludeSourceRevisionInInformationalVersion=false
 
-      - name: Package and smoke-test
+      - name: Stage and smoke-test on target OS
         run: |
           set -euo pipefail
           mkdir -p artifacts/package
           cp osu.Game.Rulesets.Updater/bin/Release/net8.0/osu.Game.Rulesets.ZankaiUpdater.dll artifacts/package/
-          cp artifacts/helper/ZankaiUpdater.exe artifacts/package/
+          cp "artifacts/helper/$HELPER_NAME" artifacts/package/
           test -s artifacts/package/osu.Game.Rulesets.ZankaiUpdater.dll
-          test -s artifacts/package/ZankaiUpdater.exe
+          test -s "artifacts/package/$HELPER_NAME"
+          if [[ "$RUNNER_OS" != "Windows" ]]; then
+            chmod 755 "artifacts/package/$HELPER_NAME"
+          fi
           # Run from the package, without loose runtime or dependency files beside it.
-          ./artifacts/package/ZankaiUpdater.exe --help | tee artifacts/helper-help.txt
+          "./artifacts/package/$HELPER_NAME" --help | tee artifacts/helper-help.txt
           grep -q '^Zankai Updater' artifacts/helper-help.txt
 
-      - name: Upload DLL and EXE
+      - name: Archive Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
+          Compress-Archive -Path artifacts/package/* -DestinationPath "artifacts/release/ZankaiUpdater-$env:TARGET_RUNTIME.zip"
+
+      - name: Archive Linux or macOS package
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts/release
+          # Preserve the helper's execute permission through upload and extraction.
+          tar -czf "artifacts/release/ZankaiUpdater-$TARGET_RUNTIME.tar.gz" \
+            -C artifacts/package osu.Game.Rulesets.ZankaiUpdater.dll "$HELPER_NAME"
+
+      - name: Upload platform package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ZankaiUpdater-win-x64
-          path: artifacts/package/
+          name: ZankaiUpdater-${{ matrix.runtime }}
+          path: artifacts/release/
           if-no-files-found: error
           retention-days: 14
 
@@ -106,28 +149,31 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download packaged build
+      - name: Download all platform packages
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: ZankaiUpdater-win-x64
-          path: artifacts/package
+          pattern: ZankaiUpdater-*
+          merge-multiple: true
+          path: artifacts/release
 
-      - name: Publish DLL and EXE
+      - name: Publish platform packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          shopt -s nullglob
+          packages=(artifacts/release/*.zip artifacts/release/*.tar.gz)
+          test "${#packages[@]}" -gt 0
           extra_args=()
           release_version="${RELEASE_TAG#v}"
           if [[ "${release_version%%+*}" == *-* ]]; then
             extra_args+=(--prerelease)
           fi
           gh release create "$RELEASE_TAG" \
-            artifacts/package/osu.Game.Rulesets.ZankaiUpdater.dll \
-            artifacts/package/ZankaiUpdater.exe \
+            "${packages[@]}" \
             --verify-tag \
             --title "Zankai Updater $RELEASE_TAG" \
-            --notes $'Windows x64\n\nPlace both files in your osu! rulesets folder' \
+            --notes $'Download the archive for your system and extract both files into your osu! rulesets folder\n\nWindows: win-x64 or win-arm64\nLinux: linux-x64 or linux-arm64\nmacOS: osx-x64 for Intel, osx-arm64 for Apple Silicon' \
             "${extra_args[@]}"
