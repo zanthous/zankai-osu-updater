@@ -6,3 +6,5 @@ To install, just unzip the contents of the release that corrresponds to your ope
 
 Currently, the only ruleset provided by default is osu!sticks which can be found here: https://github.com/zanthous/Sticks
 
+I'm planning on creating another ruleset sometime soon 
+
