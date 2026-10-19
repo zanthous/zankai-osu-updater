@@ -6,6 +6,31 @@ namespace RulesetUpdater.Tests;
 [TestFixture]
 public sealed class StandaloneTests
 {
+    [Test]
+    public async Task NativePackageIncludesDesktopLibraries()
+    {
+        string? helper = Environment.GetEnvironmentVariable("ZANKAI_TEST_HELPER");
+        if (helper == null) { Assert.Ignore("Set the packaged helper path to test native desktop dependencies."); return; }
+        string temporary = Path.Combine(Path.GetTempPath(), "zankai-ui-native-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporary);
+        try
+        {
+            string path = Path.Combine(temporary, SelfUpdate.HelperName);
+            File.Copy(helper, path);
+            SelfUpdate.SetExecutable(path);
+            using var process = Process.Start(new ProcessStartInfo(path, "--verify-ui-libraries")
+            {
+                UseShellExecute = false, RedirectStandardError = true, RedirectStandardOutput = true,
+                WorkingDirectory = temporary,
+            })!;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await process.WaitForExitAsync(timeout.Token);
+            Assert.That(process.ExitCode, Is.Zero, await process.StandardError.ReadToEndAsync());
+            Assert.That(await process.StandardOutput.ReadToEndAsync(), Does.Contain("Desktop libraries verified"));
+        }
+        finally { Directory.Delete(temporary, true); }
+    }
+
     [TestCase(0)]
     [TestCase(1)]
     [TestCase(2)]

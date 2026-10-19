@@ -2,9 +2,18 @@ namespace RulesetUpdater;
 
 internal static class Program
 {
-    public static async Task<int> Main(string[] args)
+    [STAThread]
+    public static int Main(string[] args) => OpensWindow(args) ? DesktopApp.Run()
+        : args.SequenceEqual(new[] { "--verify-ui-libraries" }) ? DesktopApp.VerifyNativeLibraries()
+        : RunCommandAsync(args).GetAwaiter().GetResult();
+
+    internal static bool OpensWindow(string[] args) => args.Length == 0;
+    // Full-extraction bundles may place managed assemblies in a runtime cache.
+    // User files always belong next to the actual standalone executable.
+    internal static string DefaultRulesetsDirectory => Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+
+    private static async Task<int> RunCommandAsync(string[] args)
     {
-        bool interactive = args.Length == 0, handedOff = false;
         UpdateStorage? storage = null;
         try
         {
@@ -14,7 +23,7 @@ internal static class Program
                 Console.WriteLine("Zankai Updater\n\nChecks the catalog and itself once at osu! startup. Applies after osu! closes.\n\n  --check                  Check only; no DLL or program downloads\n  --apply                  Download and install while osu! is closed\n  --list                   List catalog sources\n  --add-source OWNER/REPO   Add a trusted external source for an installed DLL\n  --yes                    Confirm trusting the specified external repository\n  --client-version TAG     Exact version, e.g. 2026.1005.0-lazer\n  --client-path PATH       Client assembly or osu.Game.dll for compatibility checks\n  --rulesets PATH          Use a specific rulesets directory\n  --help                   Show this help");
                 return 0;
             }
-            storage = new UpdateStorage(options.Rulesets ?? AppContext.BaseDirectory);
+            storage = new UpdateStorage(options.Rulesets ?? DefaultRulesetsDirectory);
             if (options.FinishSelfUpdate) await SelfUpdateRunner.WaitForParent(options.WaitProcess, options.WaitStart);
             string lockPath = UpdateStorage.Child(storage.WorkDirectory, "updater.lock");
             FileStream updaterLock;
@@ -48,7 +57,6 @@ internal static class Program
                     if (ClientProcesses.AnyOsuRunning(storage))
                         throw new IOException("Close osu! and run ZankaiUpdater once to finish an interrupted updater replacement.");
                     SelfUpdateRunner.Start(storage);
-                    handedOff = true;
                     return 0;
                 }
 
@@ -82,17 +90,12 @@ internal static class Program
                     .Where(x => x.Rule.InstallIfMissing || storage.FindInstalled(x.Rule).Length > 0 || x.Installer.HasTransaction).ToArray();
                 if (options.Watch)
                 {
-                    handedOff = await Watch(options, storage, source, installers, self, token);
+                    await Watch(options, storage, source, installers, self, token);
                     return 0;
                 }
 
                 var previous = UpdateStorage.ReadJson<ClientSession>(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"));
                 string? version = options.Version ?? (previous != null ? ClientProcesses.ReadClientVersion(previous) : null);
-                if (interactive && version == null)
-                {
-                    Console.Write("osu! version (including -lazer or -tachyon): ");
-                    version = ClientVersion.Parse(Console.ReadLine());
-                }
                 if (version == null) throw new ArgumentException("Specify --client-version with your exact osu! version.");
                 if (options.Check)
                 {
@@ -111,13 +114,8 @@ internal static class Program
                 foreach (var (_, installer) in installers) installer.Recover();
                 int failures = await Prepare(source, installers, version, compatibility, token);
                 await PrepareSelf(storage, source, self, token);
-                if (interactive)
-                {
-                    Console.Write("Install prepared updates? [Y/n] ");
-                    if (Console.ReadLine()?.Trim().StartsWith("n", StringComparison.OrdinalIgnoreCase) == true) return 0;
-                }
                 failures += Apply(storage, installers, version);
-                if (File.Exists(self.PlanPath)) { SelfUpdateRunner.Start(storage); handedOff = true; }
+                if (File.Exists(self.PlanPath)) SelfUpdateRunner.Start(storage);
                 return failures == 0 ? 0 : 1;
             }
         }
@@ -127,14 +125,6 @@ internal static class Program
             Console.Error.WriteLine(e.Message);
             try { storage?.Status("error", e.Message); } catch { }
             return 1;
-        }
-        finally
-        {
-            if (interactive && !handedOff && !Console.IsInputRedirected)
-            {
-                Console.WriteLine("Press Enter to close.");
-                Console.ReadLine();
-            }
         }
     }
 

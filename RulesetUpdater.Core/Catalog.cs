@@ -76,11 +76,15 @@ public sealed class CatalogSource(HttpClient http, UpdateStorage storage)
             catch (Exception cached) when (cached is IOException or InvalidDataException or JsonException) { catalog = Bundled(); }
         }
         RulesetCatalog? external = UpdateStorage.ReadJson<RulesetCatalog>(UpdateStorage.Child(storage.WorkDirectory, "external-sources.json"))?.Validate();
-        // Maintained entries (including disabled ones) take precedence over user-added discovery.
-        return new RulesetCatalog(1, catalog.Rulesets.Concat(external?.Rulesets.Where(e => !catalog.Rulesets.Any(c => c.AssemblyName == e.AssemblyName)) ?? []).ToArray()).Validate();
+        // A user may opt into installing a catalog mode. Its maintained source, compatibility
+        // policy and disabled status still take precedence over all external-source data.
+        var maintained = catalog.Rulesets.Select(c => c.Enabled && external?.Rulesets.Any(e => e.AssemblyName == c.AssemblyName
+            && e.Repository.Equals(c.Repository, StringComparison.OrdinalIgnoreCase) && e.InstallIfMissing) == true
+                ? c with { InstallIfMissing = true } : c);
+        return new RulesetCatalog(1, maintained.Concat(external?.Rulesets.Where(e => !catalog.Rulesets.Any(c => c.AssemblyName == e.AssemblyName)) ?? []).ToArray()).Validate();
     }
 
-    public static async Task<ManagedRuleset[]> DiscoverAsync(string repository, GitHubSource source, UpdateStorage storage, CancellationToken cancellationToken)
+    public static async Task<ManagedRuleset[]> DiscoverAsync(string repository, GitHubSource source, UpdateStorage storage, CancellationToken cancellationToken, bool includeMissing = false)
     {
         repository = RulesetCatalog.Repository(repository);
         Release? release = await source.LatestAsync(repository, cancellationToken);
@@ -91,7 +95,7 @@ public sealed class CatalogSource(HttpClient http, UpdateStorage storage)
             if (release.Assets.Count(a => a.Name == asset.Name) != 1) throw new InvalidDataException("Ambiguous DLL assets.");
             var ruleset = new ManagedRuleset(repository, Path.GetFileNameWithoutExtension(asset.Name)) { AssetPattern = "{assembly}.dll", Channels = ["lazer"] };
             new RulesetCatalog(1, [ruleset]).Validate();
-            if (storage.FindInstalled(ruleset).Length == 0) continue;
+            if (!includeMissing && storage.FindInstalled(ruleset).Length == 0) continue;
             GitHubSource.ExpectedHash(asset);
             found.Add(ruleset);
         }

@@ -1,13 +1,24 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
     <AssemblyName>ZankaiUpdater</AssemblyName>
     <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
     <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <!-- .NET 8 does not classify universal Mach-O dylibs as native bundle files.
+         https://github.com/dotnet/runtime/issues/113215 -->
+    <IncludeAllContentForSelfExtract Condition="$(RuntimeIdentifier.StartsWith('osx-'))">true</IncludeAllContentForSelfExtract>
     <DebugType>embedded</DebugType>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
     <ProjectReference Include="../RulesetUpdater.Core/RulesetUpdater.Core.csproj" />
+    <InternalsVisibleTo Include="osu.Game.Rulesets.UpdaterFixture" />
+    <EmbeddedResource Include="ThirdPartyNotices.txt" LogicalName="Licenses.Desktop.txt" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)/skiasharp/2.88.9/LICENSE.txt" LogicalName="Licenses.SkiaSharp.txt" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)/skiasharp/2.88.9/THIRD-PARTY-NOTICES.txt" LogicalName="Licenses.SkiaSharp.ThirdParty.txt" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)/harfbuzzsharp/8.3.1.1/LICENSE.txt" LogicalName="Licenses.HarfBuzzSharp.txt" />
+    <EmbeddedResource Include="$(NuGetPackageRoot)/harfbuzzsharp.nativeassets.linux/8.3.1.1/THIRD-PARTY-NOTICES.txt" LogicalName="Licenses.HarfBuzz.ThirdParty.txt" />
   </ItemGroup>
 </Project>

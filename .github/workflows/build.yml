@@ -110,6 +110,9 @@ jobs:
           # Run from the package, without loose runtime or dependency files beside it.
           "./artifacts/package/$HELPER_NAME" --help | tee artifacts/helper-help.txt
           grep -q '^Zankai Updater' artifacts/helper-help.txt
+          # Loading the UI libraries from this two-file package catches missing native
+          # dependencies without requiring a desktop session on the build runner.
+          "./artifacts/package/$HELPER_NAME" --verify-ui-libraries
 
       - name: Test catalog, installs, recovery, and native self-update
         env:
