@@ -34,15 +34,9 @@ jobs:
           - name: Windows x64
             runner: windows-latest
             runtime: win-x64
-          - name: Windows ARM64
-            runner: windows-11-arm
-            runtime: win-arm64
           - name: Linux x64
             runner: ubuntu-24.04
             runtime: linux-x64
-          - name: Linux ARM64
-            runner: ubuntu-24.04-arm
-            runtime: linux-arm64
           - name: macOS Intel
             runner: macos-15-intel
             runtime: osx-x64
@@ -181,5 +175,5 @@ jobs:
             "${packages[@]}" \
             --verify-tag \
             --title "Zankai Updater $RELEASE_TAG" \
-            --notes $'Download the archive for your system and extract both files into your osu! rulesets folder\n\nWindows: win-x64 or win-arm64\nLinux: linux-x64 or linux-arm64\nmacOS: osx-x64 for Intel, osx-arm64 for Apple Silicon' \
+            --notes $'Download the archive for your system and extract both files into your osu! rulesets folder\n\nWindows: win-x64\nLinux: linux-x64\nmacOS: osx-x64 for Intel, osx-arm64 for Apple Silicon' \
             "${extra_args[@]}"

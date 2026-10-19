@@ -6,18 +6,32 @@ namespace RulesetUpdater.Tests;
 [TestFixture]
 public sealed class StandaloneTests
 {
-    [Test]
-    public async Task NativeRunnerReplacesBothFilesAfterParentExits()
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task NativeRunnerReplacesBothFilesAfterParentExits(bool useDirectoryAlias)
     {
+        if (useDirectoryAlias && OperatingSystem.IsWindows())
+        {
+            Assert.Ignore("Creating directory symlinks on Windows requires privileges not needed by the updater.");
+            return;
+        }
         string? helper = Environment.GetEnvironmentVariable("ZANKAI_TEST_HELPER");
         string? bridge = Environment.GetEnvironmentVariable("ZANKAI_TEST_BRIDGE");
         if (helper == null || bridge == null) { Assert.Ignore("Set packaged helper and bridge paths to test a native self-update."); return; }
         helper = Path.GetFullPath(helper);
         bridge = Path.GetFullPath(bridge);
-        string directory = Path.Combine(Path.GetTempPath(), "zankai-native-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
+        string temporary = Path.Combine(Path.GetTempPath(), "zankai-native-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporary);
         try
         {
+            string directory = temporary;
+            if (useDirectoryAlias)
+            {
+                string physical = Path.Combine(temporary, "physical");
+                Directory.CreateDirectory(physical);
+                directory = Path.Combine(temporary, "alias");
+                Directory.CreateSymbolicLink(directory, physical);
+            }
             var storage = new UpdateStorage(directory);
             string stageName = "self-" + Guid.NewGuid().ToString("N");
             string stage = Path.Combine(storage.WorkDirectory, stageName);
@@ -52,6 +66,6 @@ public sealed class StandaloneTests
             Assert.That(installed.ExitCode, Is.Zero);
             Assert.That(output, Does.StartWith("Zankai Updater"));
         }
-        finally { Directory.Delete(directory, true); }
+        finally { Directory.Delete(temporary, true); }
     }
 }

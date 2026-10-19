@@ -6,9 +6,7 @@ namespace RulesetUpdater;
 internal static class SelfUpdateRunner
 {
     public static string Version => typeof(SelfUpdateRunner).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "";
-    public static bool Available(UpdateStorage storage) => Environment.ProcessPath != null
-        && string.Equals(Path.GetFullPath(Environment.ProcessPath), UpdateStorage.Child(storage.RulesetsDirectory, SelfUpdate.HelperName),
-                         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+    public static bool Available(UpdateStorage storage) => ExecutablePath.IsExpected(Environment.ProcessPath, UpdateStorage.Child(storage.RulesetsDirectory, SelfUpdate.HelperName))
         && File.Exists(UpdateStorage.Child(storage.RulesetsDirectory, SelfUpdate.BridgeName));
 
     public static void Start(UpdateStorage storage)

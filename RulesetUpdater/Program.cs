@@ -34,7 +34,7 @@ internal static class Program
                 if (options.FinishSelfUpdate)
                 {
                     string runner = Path.Combine(storage.WorkDirectory, "install-runner", SelfUpdate.HelperName);
-                    if (!string.Equals(Path.GetFullPath(Environment.ProcessPath ?? ""), runner, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                    if (!ExecutablePath.IsExpected(Environment.ProcessPath, runner))
                         throw new InvalidOperationException("Self-replacement must run from the temporary install runner.");
                     if (ClientProcesses.AnyOsuRunning(storage)) return 0;
                     self.Recover();
