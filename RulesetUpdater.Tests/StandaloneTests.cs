@@ -6,11 +6,12 @@ namespace RulesetUpdater.Tests;
 [TestFixture]
 public sealed class StandaloneTests
 {
-    [TestCase(false)]
-    [TestCase(true)]
-    public async Task NativeRunnerReplacesBothFilesAfterParentExits(bool useDirectoryAlias)
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(2)]
+    public async Task NativeRunnerReplacesBothFilesAfterParentExits(int directoryAliasDepth)
     {
-        if (useDirectoryAlias && OperatingSystem.IsWindows())
+        if (directoryAliasDepth > 0 && OperatingSystem.IsWindows())
         {
             Assert.Ignore("Creating directory symlinks on Windows requires privileges not needed by the updater.");
             return;
@@ -25,12 +26,21 @@ public sealed class StandaloneTests
         try
         {
             string directory = temporary;
-            if (useDirectoryAlias)
+            if (directoryAliasDepth > 0)
             {
                 string physical = Path.Combine(temporary, "physical");
-                Directory.CreateDirectory(physical);
+                Directory.CreateDirectory(Path.Combine(physical, "nested"));
+                string target = physical;
+                if (directoryAliasDepth == 2)
+                {
+                    // Model macOS /var -> /private/var even on Linux: resolving the
+                    // install alias returns a target whose parent is itself an alias.
+                    string parentAlias = Path.Combine(temporary, "parent-alias");
+                    Directory.CreateSymbolicLink(parentAlias, physical);
+                    target = Path.Combine(parentAlias, "nested");
+                }
                 directory = Path.Combine(temporary, "alias");
-                Directory.CreateSymbolicLink(directory, physical);
+                Directory.CreateSymbolicLink(directory, target);
             }
             var storage = new UpdateStorage(directory);
             string stageName = "self-" + Guid.NewGuid().ToString("N");

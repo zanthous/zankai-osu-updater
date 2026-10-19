@@ -16,15 +16,25 @@ public static class ExecutablePath
     private static string resolveParentAliases(string path)
     {
         string fullPath = Path.GetFullPath(path);
-        string parent = Path.GetDirectoryName(fullPath)!;
-        string root = Path.GetPathRoot(parent)!;
+        int remainingLinks = 64;
+        string parent = resolveDirectoryAliases(Path.GetDirectoryName(fullPath)!, ref remainingLinks);
+        return Path.Combine(parent, Path.GetFileName(fullPath));
+    }
+
+    private static string resolveDirectoryAliases(string directory, ref int remainingLinks)
+    {
+        string root = Path.GetPathRoot(directory)!;
         string resolved = root;
-        foreach (string part in parent[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
+        foreach (string part in directory[root.Length..].Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries))
         {
             resolved = Path.Combine(resolved, part);
-            // ResolveLinkTarget on the executable alone would miss links in its ancestors.
-            resolved = new DirectoryInfo(resolved).ResolveLinkTarget(true)?.FullName ?? resolved;
+            var target = new DirectoryInfo(resolved).ResolveLinkTarget(false);
+            if (target == null) continue;
+            if (--remainingLinks < 0) throw new IOException("Too many symbolic links in executable path.");
+            // A link's target can itself contain aliased parents, e.g. /var on macOS.
+            // Even ResolveLinkTarget(true) doesn't canonicalise those ancestors.
+            resolved = resolveDirectoryAliases(target.FullName, ref remainingLinks);
         }
-        return Path.Combine(resolved, Path.GetFileName(fullPath));
+        return resolved;
     }
 }

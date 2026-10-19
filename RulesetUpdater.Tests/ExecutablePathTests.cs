@@ -59,6 +59,21 @@ public sealed class ExecutablePathTests
         Assert.That(ExecutablePath.IsExpected(Path.Combine(temporary, "alias-again", "nested", SelfUpdate.HelperName), executable), Is.True);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AcceptsDirectoryAliasWhoseTargetHasAnAliasedParent(bool relativeTarget)
+    {
+        requireSymlinks();
+        string parentAlias = Path.Combine(temporary, "parent-alias");
+        Directory.CreateSymbolicLink(parentAlias, Path.Combine(temporary, "physical"));
+        string alias = Path.Combine(temporary, "alias");
+        Directory.CreateSymbolicLink(alias, Path.Combine(relativeTarget ? "parent-alias" : parentAlias, "nested"));
+        string other = Path.Combine(alias, SelfUpdate.HelperName);
+        Assert.That(File.Exists(other), Is.True);
+        Assert.That(ExecutablePath.IsExpected(other, executable), Is.True);
+        Assert.That(ExecutablePath.IsExpected(executable, other), Is.True);
+    }
+
     [Test]
     public void StillRejectsExecutableSymlinks()
     {
