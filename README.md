@@ -2,7 +2,7 @@ This is an osu! lazer gamemode/ruleset that automatically updates gamemodes made
 
 This updater will be configured to download and keep all the gamemodes I make for osu! lazer simply.
 
-To install, just unzip the contents of the release that corrresponds to your operating system into your rulesets directory.
+**To install**, just unzip the contents of the release that corrresponds to your operating system into your rulesets directory.
 
 Currently, the only ruleset provided by default is osu!sticks which can be found here: https://github.com/zanthous/Sticks
 
