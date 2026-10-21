@@ -1,13 +1,7 @@
 namespace RulesetUpdater;
 
-internal static class Program
+internal static partial class Program
 {
-    [STAThread]
-    public static int Main(string[] args) => OpensWindow(args) ? DesktopApp.Run()
-        : args.SequenceEqual(new[] { "--verify-ui-libraries" }) ? DesktopApp.VerifyNativeLibraries()
-        : RunCommandAsync(args).GetAwaiter().GetResult();
-
-    internal static bool OpensWindow(string[] args) => args.Length == 0;
     // Full-extraction bundles may place managed assemblies in a runtime cache.
     // User files always belong next to the actual standalone executable.
     internal static string DefaultRulesetsDirectory => Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;

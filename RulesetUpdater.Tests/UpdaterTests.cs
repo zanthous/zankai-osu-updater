@@ -217,13 +217,13 @@ public sealed class UpdaterTests
     {
         AssemblyInfo info = AssemblyInfo.Read(typeof(UpdaterTests).Assembly.Location);
         Assert.That(info.RulesetApi, Is.EqualTo("2026.818.0"));
-        Assert.That(info.TargetFramework, Is.EqualTo(".NETCoreApp,Version=v8.0"));
-        var game = new AssemblyInfo("osu.Game", "2026.1005.0", true) { RulesetApi = "2026.818.0", TargetFramework = ".NETCoreApp,Version=v8.0" };
+        Assert.That(info.TargetFramework, Is.EqualTo(".NETCoreApp,Version=v10.0"));
+        var game = new AssemblyInfo("osu.Game", "2026.1005.0", true) { RulesetApi = "2026.818.0", TargetFramework = ".NETCoreApp,Version=v10.0" };
         var compatible = new ClientCompatibility(game, directory);
         Assert.That(compatible.Rejection(info), Is.Null);
         Assert.That(compatible.Rejection(info with { RulesetApi = "2022.822.0" }), Does.Contain("does not match"));
         Assert.That(compatible.Rejection(info with { RulesetApi = null }), Does.Contain("Cannot verify"));
-        Assert.That(compatible.Rejection(info with { TargetFramework = ".NETCoreApp,Version=v10.0" }), Does.Contain("runtime"));
+        Assert.That(compatible.Rejection(info with { TargetFramework = ".NETCoreApp,Version=v11.0" }), Does.Contain("runtime"));
         Assert.That(compatible.Rejection(info with { References = new Dictionary<string, Version> { ["osu.Game"] = new Version(9999, 1) } }), Does.Contain("dependency"));
     }
 

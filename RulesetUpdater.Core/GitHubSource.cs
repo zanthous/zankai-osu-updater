@@ -16,7 +16,7 @@ public sealed class GitHubSource(HttpClient http)
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         response.EnsureSuccessStatusCode();
         await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
-        Release? release = await JsonSerializer.DeserializeAsync<Release>(body, UpdateStorage.Json, cancellationToken);
+        Release? release = await JsonSerializer.DeserializeAsync(body, UpdaterJsonContext.Default.Release, cancellationToken);
         return release is { Draft: false, Prerelease: false } ? release : null;
     }
 
@@ -37,7 +37,7 @@ public sealed class GitHubSource(HttpClient http)
             using var response = await http.SendAsync(request, cancellationToken);
             response.EnsureSuccessStatusCode();
             await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
-            Release[] batch = await JsonSerializer.DeserializeAsync<Release[]>(body, UpdateStorage.Json, cancellationToken) ?? [];
+            Release[] batch = await JsonSerializer.DeserializeAsync(body, UpdaterJsonContext.Default.ReleaseArray, cancellationToken) ?? [];
             releases.AddRange(batch);
             if (batch.Length < 100) break;
         }

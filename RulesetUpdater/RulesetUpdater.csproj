@@ -1,24 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <!-- One Native AOT program for every platform: a Win32 window on Windows, a terminal menu elsewhere. -->
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
+    <OutputType Condition="$(RuntimeIdentifier.StartsWith('win-'))">WinExe</OutputType>
+    <ApplicationManifest Condition="$(RuntimeIdentifier.StartsWith('win-'))">app.manifest</ApplicationManifest>
     <AssemblyName>ZankaiUpdater</AssemblyName>
-    <PublishSingleFile Condition="'$(RuntimeIdentifier)' != ''">true</PublishSingleFile>
-    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">true</SelfContained>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <!-- .NET 8 does not classify universal Mach-O dylibs as native bundle files.
-         https://github.com/dotnet/runtime/issues/113215 -->
-    <IncludeAllContentForSelfExtract Condition="$(RuntimeIdentifier.StartsWith('osx-'))">true</IncludeAllContentForSelfExtract>
-    <DebugType>embedded</DebugType>
+    <PublishAot>true</PublishAot>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <StripSymbols>true</StripSymbols>
+    <DebugType>none</DebugType>
+    <!-- Do not require ICU on Linux; nothing here is culture-sensitive. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    <ILLinkTreatWarningsAsErrors>true</ILLinkTreatWarningsAsErrors>
+    <IlcTreatWarningsAsErrors>true</IlcTreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
-    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
     <ProjectReference Include="../RulesetUpdater.Core/RulesetUpdater.Core.csproj" />
     <InternalsVisibleTo Include="osu.Game.Rulesets.UpdaterFixture" />
-    <EmbeddedResource Include="ThirdPartyNotices.txt" LogicalName="Licenses.Desktop.txt" />
-    <EmbeddedResource Include="$(NuGetPackageRoot)/skiasharp/2.88.9/LICENSE.txt" LogicalName="Licenses.SkiaSharp.txt" />
-    <EmbeddedResource Include="$(NuGetPackageRoot)/skiasharp/2.88.9/THIRD-PARTY-NOTICES.txt" LogicalName="Licenses.SkiaSharp.ThirdParty.txt" />
-    <EmbeddedResource Include="$(NuGetPackageRoot)/harfbuzzsharp/8.3.1.1/LICENSE.txt" LogicalName="Licenses.HarfBuzzSharp.txt" />
-    <EmbeddedResource Include="$(NuGetPackageRoot)/harfbuzzsharp.nativeassets.linux/8.3.1.1/THIRD-PARTY-NOTICES.txt" LogicalName="Licenses.HarfBuzz.ThirdParty.txt" />
   </ItemGroup>
 </Project>

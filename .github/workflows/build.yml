@@ -52,10 +52,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up .NET 8
+      - name: Set up .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: "8.0.4xx"
+          dotnet-version: "10.0.x"
 
       - name: Resolve build version
         run: |
@@ -84,14 +84,11 @@ jobs:
             -p:InformationalVersion="$INFORMATIONAL_VERSION" \
             -p:IncludeSourceRevisionInInformationalVersion=false
 
-      - name: Publish standalone helper
+      - name: Publish native helper
         run: |
           dotnet publish RulesetUpdater/RulesetUpdater.csproj \
-            --configuration Release --runtime "$TARGET_RUNTIME" --self-contained true \
+            --configuration Release --runtime "$TARGET_RUNTIME" \
             --output artifacts/helper \
-            -p:PublishSingleFile=true \
-            -p:IncludeNativeLibrariesForSelfExtract=true \
-            -p:DebugType=embedded \
             -p:Version="$BUILD_VERSION" \
             -p:InformationalVersion="$INFORMATIONAL_VERSION" \
             -p:IncludeSourceRevisionInInformationalVersion=false
@@ -104,15 +101,36 @@ jobs:
           cp "artifacts/helper/$HELPER_NAME" artifacts/package/
           test -s artifacts/package/osu.Game.Rulesets.ZankaiUpdater.dll
           test -s "artifacts/package/$HELPER_NAME"
+          # Guard the installed executable size, not the compressed release archive.
+          bytes=$(wc -c < "artifacts/package/$HELPER_NAME")
+          printf 'Standalone helper: %s bytes\n' "$bytes"
+          if (( bytes > 10 * 1024 * 1024 )); then
+            printf 'Helper exceeds the 10 MiB size budget; check dependencies\n' >&2
+            exit 1
+          fi
           if [[ "$RUNNER_OS" != "Windows" ]]; then
             chmod 755 "artifacts/package/$HELPER_NAME"
+          fi
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # Native AOT binds to the build machine's glibc. Keep Ubuntu 22.04, Debian 12 and SteamOS 3 working.
+            newest="$(objdump -T "artifacts/package/$HELPER_NAME" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -n1)"
+            printf 'Requires %s\n' "$newest"
+            if [[ "$(printf '%s\nGLIBC_2.34\n' "$newest" | sort -V | tail -n1)" != "GLIBC_2.34" ]]; then
+              printf 'Helper requires %s; the supported minimum is GLIBC_2.34\n' "$newest" >&2
+              exit 1
+            fi
           fi
           # Run from the package, without loose runtime or dependency files beside it.
           "./artifacts/package/$HELPER_NAME" --help | tee artifacts/helper-help.txt
           grep -q '^Zankai Updater' artifacts/helper-help.txt
-          # Loading the UI libraries from this two-file package catches missing native
-          # dependencies without requiring a desktop session on the build runner.
-          "./artifacts/package/$HELPER_NAME" --verify-ui-libraries
+
+      - name: Verify packaged window or terminal menu
+        # Windows drives the Win32 window; Linux and macOS drive the terminal menu.
+        run: '"./artifacts/package/$HELPER_NAME" --verify-ui'
+
+      - name: Run the terminal menu in a real terminal
+        if: runner.os != 'Windows'
+        run: python3 .github/scripts/terminal-menu-smoke.py "artifacts/package/$HELPER_NAME"
 
       - name: Test catalog, installs, recovery, and native self-update
         env:

@@ -18,10 +18,12 @@ public static partial class ClientVersion
 public sealed record ManagedRuleset(string Repository, string AssemblyName)
 {
     public static readonly ManagedRuleset Sticks = new("zanthous/Sticks", "osu.Game.Rulesets.Sticks");
-    public string Name { get; init; } = AssemblyName?.Replace("osu.Game.Rulesets.", "") ?? "";
-    public string AssetPattern { get; init; } = "{assembly}-{client}.dll";
-    public string[] Channels { get; init; } = ["lazer", "tachyon"];
-    public bool Enabled { get; init; } = true;
+    // .NET 8 source-generated JSON overwrites missing init-only properties with
+    // zero/null. Setters preserve these existing catalog defaults when omitted.
+    public string Name { get; set; } = AssemblyName?.Replace("osu.Game.Rulesets.", "") ?? "";
+    public string AssetPattern { get; set; } = "{assembly}-{client}.dll";
+    public string[] Channels { get; set; } = ["lazer", "tachyon"];
+    public bool Enabled { get; set; } = true;
     public bool InstallIfMissing { get; init; }
     public string? DisabledReason { get; init; }
     public bool ExactClient => AssetPattern.Contains("{client}", StringComparison.Ordinal);
@@ -32,23 +34,23 @@ public sealed record ManagedRuleset(string Repository, string AssemblyName)
 public sealed record ReleaseAsset
 {
     public long Id { get; init; }
-    public string Name { get; init; } = "";
+    public string Name { get; set; } = "";
     public long Size { get; init; }
     public string? Digest { get; init; }
     [JsonPropertyName("browser_download_url")]
-    public string DownloadUrl { get; init; } = "";
+    public string DownloadUrl { get; set; } = "";
 }
 
 public sealed record Release
 {
     public long Id { get; init; }
     [JsonPropertyName("tag_name")]
-    public string Tag { get; init; } = "";
+    public string Tag { get; set; } = "";
     [JsonPropertyName("published_at")]
     public DateTimeOffset PublishedAt { get; init; }
     public bool Draft { get; init; }
     public bool Prerelease { get; init; }
-    public ReleaseAsset[] Assets { get; init; } = [];
+    public ReleaseAsset[] Assets { get; set; } = [];
 }
 
 public sealed record UpdateCandidate(string ReleaseTag, ReleaseAsset Asset, string ClientVersion);

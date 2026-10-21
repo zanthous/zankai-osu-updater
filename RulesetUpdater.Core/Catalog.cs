@@ -41,7 +41,7 @@ public sealed class CatalogSource(HttpClient http, UpdateStorage storage)
     public static RulesetCatalog Bundled()
     {
         using var resource = typeof(CatalogSource).Assembly.GetManifestResourceStream("rulesets.json")!;
-        return (JsonSerializer.Deserialize<RulesetCatalog>(resource, UpdateStorage.Json) ?? throw new InvalidDataException("Missing catalog.")).Validate();
+        return (JsonSerializer.Deserialize(resource, UpdaterJsonContext.Default.RulesetCatalog) ?? throw new InvalidDataException("Missing catalog.")).Validate();
     }
 
     public async Task<RulesetCatalog> LoadAsync(CancellationToken cancellationToken)
@@ -65,7 +65,7 @@ public sealed class CatalogSource(HttpClient http, UpdateStorage storage)
                 if (buffer.Length + count > 256 * 1024) throw new InvalidDataException("Catalog is too large.");
                 buffer.Write(chunk, 0, count);
             }
-            catalog = (JsonSerializer.Deserialize<RulesetCatalog>(buffer.ToArray(), UpdateStorage.Json)
+            catalog = (JsonSerializer.Deserialize(buffer.ToArray(), UpdaterJsonContext.Default.RulesetCatalog)
                        ?? throw new InvalidDataException("Empty catalog.")).Validate();
             UpdateStorage.WriteJson(cache, catalog);
         }

@@ -1,6 +1,9 @@
 namespace RulesetUpdater;
 
-internal sealed record DesktopCheckResult(string Summary, string Details, int ReadyCount);
+internal enum DesktopItemState { Info, Current, Ready, Attention }
+internal sealed record DesktopCheckItem(string Message, DesktopItemState State);
+// Details is the plain text the window shows; Items carries the same lines with their state.
+internal sealed record DesktopCheckResult(string Summary, string Details, int ReadyCount, DesktopCheckItem[]? Items = null);
 internal sealed record DesktopInstallResult(string Message, bool ExitForSelfUpdate = false);
 
 internal interface IDesktopUpdater
@@ -99,7 +102,7 @@ internal sealed class DesktopUpdater(string directory, HttpClient http,
         var (version, compatibility) = client(storage);
         var catalog = await new CatalogSource(http, storage).LoadAsync(cancellation);
         storage.RemoveEmptyRulesetDirectories(catalog.Rulesets);
-        var messages = new List<string>();
+        var items = new List<DesktopCheckItem>();
         int ready = 0;
         bool current = true;
         foreach (var (rule, installer) in installers(storage, catalog))
@@ -108,16 +111,18 @@ internal sealed class DesktopUpdater(string directory, HttpClient http,
             try
             {
                 installer.Recover();
-                if (await installer.PrepareAsync(source, version, cancellation, compatibility) != null) ready++;
+                bool staged = await installer.PrepareAsync(source, version, cancellation, compatibility) != null;
+                if (staged) ready++;
                 var status = installer.Status;
-                current &= status?.State is "current" or "newer-installed" or "development-build" or "disabled";
-                messages.Add($"{rule.Name}: {status?.Message}");
+                bool settled = status?.State is "current" or "newer-installed" or "development-build" or "disabled";
+                current &= settled;
+                items.Add(new($"{rule.Name}: {status?.Message}", staged ? DesktopItemState.Ready : settled ? DesktopItemState.Current : DesktopItemState.Attention));
             }
             catch (Exception e) when (!cancellation.IsCancellationRequested)
             {
                 current = false;
                 installer.RecordFailure(e);
-                messages.Add($"{rule.Name}: {e.Message}");
+                items.Add(new($"{rule.Name}: {e.Message}", DesktopItemState.Attention));
             }
         }
         if (checkSelf && SelfUpdateRunner.Available(storage))
@@ -129,19 +134,19 @@ internal sealed class DesktopUpdater(string directory, HttpClient http,
                 if (previous is { Applying: true } or { Committed: true })
                 {
                     ready++;
-                    messages.Add("Zankai Updater: an interrupted update is ready to finish.");
+                    items.Add(new("Zankai Updater: an interrupted update is ready to finish.", DesktopItemState.Ready));
                 }
                 else if (await self.PrepareAsync(source, SelfUpdateRunner.Version, cancellation) is { } update)
                 {
                     ready++;
-                    messages.Add($"Zankai Updater: {update.ReleaseTag} is ready.");
+                    items.Add(new($"Zankai Updater: {update.ReleaseTag} is ready.", DesktopItemState.Ready));
                 }
             }
-            catch (Exception e) when (!cancellation.IsCancellationRequested) { current = false; messages.Add($"Zankai Updater: {e.Message}"); }
+            catch (Exception e) when (!cancellation.IsCancellationRequested) { current = false; items.Add(new($"Zankai Updater: {e.Message}", DesktopItemState.Attention)); }
         }
         string summary = ready > 0 ? $"{ready} update{(ready == 1 ? "" : "s")} ready to install"
             : current ? "Everything is up to date" : "No updates ready to install — see details below";
-        return new DesktopCheckResult(summary, string.Join(Environment.NewLine + Environment.NewLine, messages), ready);
+        return new DesktopCheckResult(summary, string.Join(Environment.NewLine + Environment.NewLine, items.Select(i => i.Message)), ready, items.ToArray());
     }
 
     public async Task<DesktopInstallResult> InstallAsync(CancellationToken cancellation)

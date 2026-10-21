@@ -5,7 +5,7 @@ namespace RulesetUpdater;
 
 public sealed class UpdateStorage
 {
-    public static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, PropertyNamingPolicy = JsonNamingPolicy.CamelCase, WriteIndented = true };
+    public static JsonSerializerOptions Json => UpdaterJsonContext.Default.Options;
     public string RulesetsDirectory { get; }
     public string WorkDirectory { get; }
 
@@ -68,7 +68,7 @@ public sealed class UpdateStorage
     public static T? ReadJson<T>(string path)
     {
         RequireRegularPath(path);
-        return File.Exists(path) ? JsonSerializer.Deserialize<T>(File.ReadAllText(path), Json) : default;
+        return File.Exists(path) ? JsonSerializer.Deserialize(File.ReadAllText(path), UpdaterJsonContext.TypeInfo<T>()) : default;
     }
 
     public static void WriteJson<T>(string path, T value)
@@ -79,7 +79,7 @@ public sealed class UpdateStorage
         {
             using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                JsonSerializer.Serialize(file, value, Json);
+                JsonSerializer.Serialize(file, value, UpdaterJsonContext.TypeInfo<T>());
                 file.Flush(true);
             }
             File.Move(temporary, path, true);
