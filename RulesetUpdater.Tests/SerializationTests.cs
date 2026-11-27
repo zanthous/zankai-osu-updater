@@ -81,6 +81,30 @@ public sealed class SerializationTests
     {
         roundTrip(CatalogSource.Bundled());
         roundTrip(new ClientSession { ProcessId = 123, OfficialBuild = true });
+        roundTrip(new ClientSession
+        {
+            ProcessId = 12031,
+            ProcessStartUtcTicks = 639304383982834526,
+            ProcessStartClockTicks = 481920,
+            BootId = "5f0c8a1e-3d0b-4a57-9c55-0d6f5d1b2a10",
+            Version = "2026.1115.0-lazer",
+            ExecutablePath = "/tmp/.mount_osu.ApGCEoef/usr/bin/osu!",
+            AssemblyPath = "/tmp/.mount_osu.ApGCEoef/usr/bin/osu!.dll",
+            OfficialBuild = true,
+            AppImagePath = "/opt/osu-lazer/osu.AppImage",
+            AppImageSize = 123456,
+            AppImageSha256 = new string('a', 64),
+            Compatibility = new ClientCompatibilitySnapshot
+            {
+                TargetFramework = ".NETCoreApp,Version=v10.0",
+                RulesetApi = "2026.818.0",
+                Assemblies = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["osu.Framework"] = "2026.1110.0.0",
+                    ["osu.Game"] = "2026.1115.0.0",
+                },
+            },
+        });
         roundTrip(new StagedUpdate("2026.1005.0-lazer", "v1.2.0", "hash", "payload",
             [new InstalledFile("old.dll", "previous", "1.1.0")]));
         roundTrip(new InstallJournal("mode.dll", "hash", "backup",

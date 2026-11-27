@@ -84,6 +84,27 @@ public sealed class ExecutablePathTests
         Assert.Throws<IOException>(() => ExecutablePath.IsExpected(linked, executable));
     }
 
+    [Test]
+    public void ComparesSameDirectoryWithOrWithoutTrailingSeparator()
+    {
+        string directory = Path.GetDirectoryName(executable)!;
+        Assert.That(ExecutablePath.IsSameDirectory(directory, directory + Path.DirectorySeparatorChar), Is.True);
+        Assert.That(ExecutablePath.IsSameDirectory(directory, temporary), Is.False);
+        Assert.That(ExecutablePath.IsSameDirectory(directory, Path.Combine(temporary, "missing")), Is.False);
+    }
+
+    [Test]
+    public void TreatsAliasedParentDirectoriesAsSameDirectory()
+    {
+        requireSymlinks();
+        string alias = Path.Combine(temporary, "alias");
+        Directory.CreateSymbolicLink(alias, Path.Combine(temporary, "physical"));
+        string resolved = Path.Combine(temporary, "physical", "nested");
+        string aliased = Path.Combine(alias, "nested");
+        Assert.That(ExecutablePath.IsSameDirectory(aliased, resolved), Is.True);
+        Assert.That(ExecutablePath.IsSameDirectory(resolved, aliased), Is.True);
+    }
+
     private static void requireSymlinks()
     {
         if (OperatingSystem.IsWindows()) Assert.Ignore("Creating symlinks on Windows requires additional privileges.");

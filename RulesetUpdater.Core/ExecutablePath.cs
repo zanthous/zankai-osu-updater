@@ -13,6 +13,18 @@ public static class ExecutablePath
                              OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
+    public static bool IsSameDirectory(string? first, string? second)
+    {
+        if (string.IsNullOrEmpty(first) || string.IsNullOrEmpty(second)) return false;
+        string firstFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(first));
+        string secondFull = Path.TrimEndingDirectorySeparator(Path.GetFullPath(second));
+        if (!Directory.Exists(firstFull) || !Directory.Exists(secondFull)) return false;
+        int firstLinks = 64, secondLinks = 64;
+        return string.Equals(resolveDirectoryAliases(firstFull, ref firstLinks),
+                             resolveDirectoryAliases(secondFull, ref secondLinks),
+                             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
     private static string resolveParentAliases(string path)
     {
         string fullPath = Path.GetFullPath(path);

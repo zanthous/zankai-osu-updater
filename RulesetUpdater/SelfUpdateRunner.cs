@@ -18,24 +18,31 @@ internal static class SelfUpdateRunner
         // Windows cannot replace the running executable. A temporary copy performs the swap after we exit.
         SelfUpdate.CopyAtomic(Environment.ProcessPath!, runner, true);
         using var current = Process.GetCurrentProcess();
+        long? clockTicks = ProcessIdentity.TryReadLinuxStartClockTicks(current.Id);
         var start = new ProcessStartInfo(runner) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
         foreach (string arg in new[] { "--finish-self-update", "--rulesets", storage.RulesetsDirectory,
                      "--wait-process", current.Id.ToString(), "--wait-start", current.StartTime.ToUniversalTime().Ticks.ToString() })
             start.ArgumentList.Add(arg);
+        if (clockTicks is { } clock)
+        {
+            start.ArgumentList.Add("--wait-clock");
+            start.ArgumentList.Add(clock.ToString());
+        }
         Process.Start(start)?.Dispose();
     }
 
-    public static async Task WaitForParent(int pid, long ticks)
+    public static async Task WaitForParent(int pid, long ticks, long? clockTicks = null)
     {
-        if (pid <= 0 || ticks <= 0) throw new ArgumentException("Missing updater process identity.");
+        if (pid <= 0 || (ticks <= 0 && clockTicks is not > 0)) throw new ArgumentException("Missing updater process identity.");
         try
         {
             using var parent = Process.GetProcessById(pid);
-            if (parent.StartTime.ToUniversalTime().Ticks != ticks) return;
+            if (!ClientProcesses.MatchesProcess(parent, ticks, clockTicks)) return;
             using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(1));
             await parent.WaitForExitAsync(timeout.Token);
         }
         catch (ArgumentException) { }
+        catch (InvalidOperationException) { }
     }
 
     public static void CleanRunner(UpdateStorage storage)

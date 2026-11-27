@@ -85,9 +85,15 @@ internal sealed class DesktopUpdater(string directory, HttpClient http,
     private (string Version, ClientCompatibility? Compatibility) client(UpdateStorage storage)
     {
         var previous = UpdateStorage.ReadJson<ClientSession>(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"));
-        string? version = clientVersion != null ? clientVersion(storage) : previous != null ? ClientProcesses.ReadClientVersion(previous) : null;
-        if (version == null) throw new InvalidOperationException("Launch osu! once with Zankai Updater installed, then close osu! and try again. This lets the updater identify the correct client version.");
-        return (version, previous != null ? ClientCompatibility.Read(previous.AssemblyPath) : null);
+        if (clientVersion != null)
+        {
+            string? overrideVersion = clientVersion(storage);
+            if (overrideVersion == null) throw new InvalidOperationException("Launch osu! once with Zankai Updater installed, then close osu! and try again. This lets the updater identify the correct client version.");
+            return (overrideVersion, previous != null ? ClientCompatibility.Read(previous.AssemblyPath) : null);
+        }
+        var verified = previous != null ? ClientProcesses.ReadVerifiedClient(previous) : null;
+        if (verified == null) throw new InvalidOperationException("Launch osu! once with Zankai Updater installed, then close osu! and try again. This lets the updater identify the correct client version.");
+        return verified.Value;
     }
 
     private static (ManagedRuleset Rule, Installer Installer)[] installers(UpdateStorage storage, RulesetCatalog catalog) =>

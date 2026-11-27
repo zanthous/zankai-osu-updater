@@ -18,7 +18,7 @@ internal static partial class Program
                 return 0;
             }
             storage = new UpdateStorage(options.Rulesets ?? DefaultRulesetsDirectory);
-            if (options.FinishSelfUpdate) await SelfUpdateRunner.WaitForParent(options.WaitProcess, options.WaitStart);
+            if (options.FinishSelfUpdate) await SelfUpdateRunner.WaitForParent(options.WaitProcess, options.WaitStart, options.WaitClock);
             string lockPath = UpdateStorage.Child(storage.WorkDirectory, "updater.lock");
             FileStream updaterLock;
             try { updaterLock = await AcquireLock(lockPath, options.Watch || options.FinishSelfUpdate); }
@@ -89,7 +89,8 @@ internal static partial class Program
                 }
 
                 var previous = UpdateStorage.ReadJson<ClientSession>(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"));
-                string? version = options.Version ?? (previous != null ? ClientProcesses.ReadClientVersion(previous) : null);
+                var verifiedPrevious = previous != null ? ClientProcesses.ReadVerifiedClient(previous) : null;
+                string? version = options.Version ?? verifiedPrevious?.Version;
                 if (version == null) throw new ArgumentException("Specify --client-version with your exact osu! version.");
                 if (options.Check)
                 {
@@ -103,8 +104,9 @@ internal static partial class Program
                     return 0;
                 }
                 if (ClientProcesses.AnyOsuRunning(storage)) throw new InvalidOperationException("Close osu! before applying updates.");
-                string? clientPath = options.ClientPath ?? (previous != null && ClientProcesses.ReadClientVersion(previous) == version ? previous.AssemblyPath : null);
-                var compatibility = ClientCompatibility.Read(clientPath);
+                ClientCompatibility? compatibility = options.ClientPath != null
+                    ? ClientCompatibility.Read(options.ClientPath)
+                    : verifiedPrevious is { } verified && verified.Version == version ? verified.Compatibility : null;
                 foreach (var (_, installer) in installers) installer.Recover();
                 int failures = await Prepare(source, installers, version, compatibility, token);
                 await PrepareSelf(storage, source, self, token);
@@ -185,29 +187,45 @@ internal static partial class Program
     private static async Task<bool> Watch(Options options, UpdateStorage storage, GitHubSource source,
                                          (ManagedRuleset Rule, Installer Installer)[] installers, SelfUpdate self, CancellationToken cancellation)
     {
-        string sessionPath = Path.GetFullPath(options.Session ?? throw new ArgumentException("Missing session."));
-        if (Path.GetDirectoryName(sessionPath) != storage.WorkDirectory || !Path.GetFileName(sessionPath).StartsWith("session-", StringComparison.Ordinal))
+        string rawSessionPath = Path.GetFullPath(options.Session ?? throw new ArgumentException("Missing session."));
+        string? sessionDirectory = Path.GetDirectoryName(rawSessionPath);
+        string sessionName = Path.GetFileName(rawSessionPath);
+        if (!ExecutablePath.IsSameDirectory(sessionDirectory, storage.WorkDirectory)
+            || !sessionName.StartsWith("session-", StringComparison.Ordinal))
             throw new ArgumentException("Invalid session path.");
-        ClientSession session = UpdateStorage.ReadJson<ClientSession>(sessionPath) ?? throw new InvalidDataException("Missing client session.");
-        if (session.Schema != 1 || !session.OfficialBuild || ClientVersion.Parse(session.Version) != session.Version || !ClientProcesses.Running(session))
-            throw new InvalidDataException("The osu! session is no longer valid.");
-        UpdateStorage.WriteJson(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"), session);
+        UpdateStorage.RequireRegularPath(sessionDirectory!);
+        string sessionPath = UpdateStorage.Child(storage.WorkDirectory, sessionName);
+        ClientSession? session = null;
         try
         {
+            session = UpdateStorage.ReadJson<ClientSession>(sessionPath) ?? throw new InvalidDataException("Missing client session.");
+            if (session.Schema != 1 || !session.OfficialBuild || ClientVersion.Parse(session.Version) != session.Version || !ClientProcesses.Running(session))
+                throw new InvalidDataException("The osu! session is no longer valid.");
+            // Verify the live client assembly while it is mounted/present so AppImage metadata can be snapshotted safely.
+            if (ClientProcesses.ReadLiveAssemblyVersion(session) != session.Version)
+                throw new InvalidDataException("The osu! session does not match an official client assembly.");
+            ClientCompatibility? compatibility = ClientCompatibility.Read(session.AssemblyPath);
+            ClientSession persisted = ClientProcesses.SnapshotForPersistence(session, compatibility);
+            UpdateStorage.WriteJson(UpdateStorage.Child(storage.WorkDirectory, "last-client.json"), persisted);
             // One network pass for this launch. This loop only waits for osu! to close.
-            await Prepare(source, installers, session.Version, ClientCompatibility.Read(session.AssemblyPath), cancellation);
+            await Prepare(source, installers, persisted.Version, compatibility, cancellation);
             await PrepareSelf(storage, source, self, cancellation);
-            while (ClientProcesses.Running(session)) await Task.Delay(TimeSpan.FromSeconds(2), cancellation);
+            while (ClientProcesses.Running(persisted)) await Task.Delay(TimeSpan.FromSeconds(2), cancellation);
             await Task.Delay(TimeSpan.FromSeconds(3), cancellation);
             if (ClientProcesses.AnyOsuRunning(storage)) return false;
-            string? version = ClientProcesses.ReadClientVersion(session);
-            if (version == session.Version) Apply(storage, installers, version);
+            string? version = ClientProcesses.ReadClientVersion(persisted);
+            if (version == persisted.Version) Apply(storage, installers, version);
             else storage.Status("waiting-for-client", "osu! changed installation or version. The next launch will check for matching builds.");
             if (!File.Exists(self.PlanPath)) return false;
             SelfUpdateRunner.Start(storage);
             return true;
         }
-        finally { if (!ClientProcesses.Running(session)) File.Delete(sessionPath); }
+        finally
+        {
+            if (File.Exists(sessionPath) && (session == null || !ClientProcesses.Running(session)))
+                try { File.Delete(sessionPath); } catch (IOException) { }
+            ClientProcesses.PruneDeadSessions(storage);
+        }
     }
 
     private sealed record Options
@@ -216,6 +234,7 @@ internal static partial class Program
         public string? Version, Rulesets, Session, AddSource, ClientPath;
         public int WaitProcess;
         public long WaitStart;
+        public long? WaitClock;
         public static Options Parse(string[] args)
         {
             var o = new Options();
@@ -235,6 +254,7 @@ internal static partial class Program
                     case "--finish-self-update": o.FinishSelfUpdate = true; modes++; break;
                     case "--wait-process": o.WaitProcess = int.Parse(value()); break;
                     case "--wait-start": o.WaitStart = long.Parse(value()); break;
+                    case "--wait-clock": o.WaitClock = long.Parse(value()); break;
                     case "--client-version": o.Version = ClientVersion.Parse(value()) ?? throw new ArgumentException("Invalid client version."); break;
                     case "--client-path": o.ClientPath = value(); break;
                     case "--rulesets": o.Rulesets = value(); break;
